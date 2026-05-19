@@ -23,79 +23,110 @@ Integrations: Notion (user story output), Discord (user feedback input). Agent o
 ### Prerequisites
 
 ```bash
-pip install anthropic python-dotenv
-cp .env.example .env   # add your ANTHROPIC_API_KEY and connector credentials
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # add your ANTHROPIC_API_KEY
 ```
 
-### Run the pipeline
+### 1. Write your idea document
+
+Copy the template and fill it in — or just write freely. There is no required structure.
 
 ```bash
-python orchestrator.py "your product idea or hypothesis"
+cp idea-template.md idea.md
 ```
 
-### Examples
+Open `idea.md` and write whatever you know about the idea: the concept, context, target users, known constraints, open questions, competitors you're aware of. A few sentences or several pages — both work.
+
+### 2. Run the pipeline
 
 ```bash
-# Explore adding an AI writing assistant to an existing SaaS product
-python orchestrator.py "AI writing assistant feature for our project management tool"
+# Uses idea.md by default
+python orchestrator.py
 
-# Evaluate a payments product idea
-python orchestrator.py "embedded buy-now-pay-later option for B2B invoicing"
-
-# Research a new vertical
-python orchestrator.py "mobile app targeting independent personal trainers"
+# Or pass a specific file
+python orchestrator.py my-feature-idea.md
 ```
 
 ### What happens when you run it
 
 ```
-$ python orchestrator.py "AI writing assistant for our project management tool"
+$ python orchestrator.py idea.md
 
-[1/2] Running competitive research...        ✓ (12s)
-[2/2] Running user feedback synthesis...     ✓ (18s)
+Product Agent  ·  idea.md
 
-── Research complete. Here are 3 directions to consider: ──────────────────
+[ Pre-step ] Identifying competitors and persona...
+  Competitors : Asana, Linear, Monday.com
+  Persona     : project manager
 
+[ Phase A ] Competitive research + user feedback running in parallel...
+  ✓ Competitive research complete
+  ✓ User feedback synthesis complete
+
+[ Synthesis ] Generating product direction proposals...
+
+──────────────────────────────────────────────────────────────────────
 Option 1 — Contextual AI suggestions
-  Draft and improve task descriptions inline. Competitors (Asana, Linear) 
-  have this but feedback shows users want tone/length control they don't offer.
+  Draft and improve task descriptions inline. Competitors have this but
+  feedback shows users want tone/length control they don't offer.
 
 Option 2 — Meeting-to-task AI
-  Auto-generate tasks from meeting transcripts. High demand in Reddit threads,
-  low competitive saturation at the mid-market tier.
+  Auto-generate tasks from meeting transcripts. High demand in Reddit
+  threads, low competitive saturation at the mid-market tier.
 
 Option 3 — Status update generator
-  One-click stakeholder summaries from project state. Solves a pain point
-  mentioned repeatedly in G2 reviews of competitors.
+  One-click stakeholder summaries from project state. Repeatedly
+  requested in G2 reviews of competitors.
+──────────────────────────────────────────────────────────────────────
 
-───────────────────────────────────────────────────────────────────────────
-Which direction do you want to pursue? (1 / 2 / 3 or describe your own):
+Which direction do you want to pursue? (enter a number or describe your choice):
 > 2
 
-[3/3] Drafting product spec...               ✓ (21s)
-[4/4] Generating user stories...             ✓ (14s)
-      → Pushed 6 stories to Notion workspace
+[ Phase B ] Drafting product spec...
+  ✓ Spec complete
 
-── Run complete ────────────────────────────────────────────────────────────
-Total time: 1m 5s  |  Estimated cost: $0.08
-Agents: research $0.03 · feedback $0.02 · spec $0.02 · stories $0.01
-Output: ./output/2024-01-15_meeting-to-task-ai/
-───────────────────────────────────────────────────────────────────────────
+[ Phase B ] Generating user stories...
+  ✓ User stories complete
+
+[ Notion ] Mock — stories would be pushed to Notion in Phase 2.
+
+──────────────────────────────────────────────────────────────────────
+  Run complete
+  Output folder : output/2026-05-19_idea/
+  Files         : research-brief.md · feedback-synthesis.md
+                  product-spec.md · user-stories.md
+──────────────────────────────────────────────────────────────────────
 ```
 
 ### Output files
 
-Each run creates a timestamped folder under `./output/`:
+Each run creates a timestamped folder under `./output/` named after your input file:
 
 ```
 output/
-└── 2024-01-15_meeting-to-task-ai/
+└── 2026-05-19_idea/
     ├── research-brief.md        # UC-1 competitive research
     ├── feedback-synthesis.md    # UC-2 user feedback report
-    ├── product-spec.docx        # UC-3 product specification
-    ├── user-stories.docx        # UC-4 user stories
-    └── run-metrics.jsonl        # latency, cost, handoff quality per agent
+    ├── product-spec.md          # UC-3 product specification
+    └── user-stories.md          # UC-4 user stories
 ```
+
+---
+
+## Input document
+
+The input document is intentionally free-form. You can follow the structure in `idea-template.md` or ignore it entirely. Useful things to include:
+
+- The core idea in your own words
+- Why now — what triggered this
+- Who it's for and what problem they have today
+- What you already know (customer quotes, data, prior experiments)
+- Constraints (budget, timeline, team, tech)
+- Competitors or similar products you're aware of
+- Open questions you want the research to help answer
+
+The richer the document, the more grounded the proposals and spec will be.
 
 ---
 
@@ -116,6 +147,9 @@ Secrets (API keys) go in `.env` — never committed.
 ```
 product-agent/
 ├── orchestrator.py              # main entry point
+├── agent.py                     # skill runner and agentic loop
+├── idea-template.md             # starter template for input documents
+├── idea.md                      # your input document (gitignored)
 ├── config.yaml                  # pipeline configuration
 ├── .env.example                 # secrets template
 ├── connectors/
@@ -128,4 +162,3 @@ product-agent/
 ├── product-roadmap-fit/         # roadmap fit skill (future phase)
 └── specs/                       # PRD, tech stack, implementation plan
 ```
-

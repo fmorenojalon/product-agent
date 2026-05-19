@@ -44,46 +44,52 @@ User prompt (idea / hypothesis)
 
 ## In-Scope Use Cases (PoC)
 
-### Pre-step: Competitor & Persona Extraction
-A fast Claude API call interprets the user's raw idea and returns the 2–3 most relevant competitor products to research and the primary target persona. This bridges the gap between a vague idea and the specific inputs the skills expect.
+### Input: Product Idea Document
+The user creates a free-form markdown document (`idea.md` by default, or any `.md` file) capturing everything they know about the idea — concept, context, target users, known constraints, open questions, competitors. No required structure.
 
-- Input: free-text idea from the user
+- Input: any markdown file passed as a CLI argument, or `idea.md` by default
+- The full document content is passed as context to every pipeline step
+
+### Pre-step: Competitor & Persona Extraction
+A fast Claude API call reads the input document and extracts the 2–3 most relevant competitor products to research and the primary target persona. This bridges the gap between a free-form document and the specific inputs the skills expect.
+
+- Input: full input document
 - Output: `{ competitors: [...], persona: "..." }` (JSON, used internally)
 - No skill — single orchestrator Claude call, no tools
 
 ### UC-1: Competitive Research
 The agent produces a structured research brief covering the competitive landscape, market positioning, and relevant technical and commercial signals for the identified competitors.
 
-- Input: idea + extracted competitor names
+- Input: full input document + extracted competitor names
 - Output: research brief (markdown)
 - Agent: `product-analysis` skill (SKILL.md as system prompt via Claude API)
-- Tools: Brave Search (web search)
+- Tools: Anthropic hosted web search
 - Runs in parallel with UC-2
 
 ### UC-2: User Feedback Synthesis
 The agent researches publicly available user feedback on comparable products and distills it into key themes, sentiment signals, and quoted evidence relevant to the idea.
 
-- Input: idea + extracted competitors + persona
+- Input: full input document + extracted competitors + persona
 - Output: feedback synthesis report (markdown)
 - Agent: `product-user-feedback` skill (SKILL.md as system prompt via Claude API)
-- Tools: Brave Search (web search)
+- Tools: Anthropic hosted web search
 - Runs in parallel with UC-1
 - **New work — Discord connector:** Implemented in Phase 2. Phase 1 uses a mock connector returning fixture data.
 
 ### Synthesis & Proposal Generation (Orchestrator step)
 Once UC-1 and UC-2 complete, the orchestrator synthesizes both outputs and generates 2–3 distinct product direction proposals. Each proposal includes a short name and rationale grounded in the research.
 
-- Input: UC-1 brief + UC-2 synthesis
+- Input: full input document + UC-1 brief + UC-2 synthesis
 - Output: 2–3 labelled proposals printed to CLI
 - New orchestrator logic — single Claude API call, no tools, no skill
 
 ### UC-3: Spec Drafting
 Given the confirmed direction and research context, the agent generates a product specification document.
 
-- Input: confirmed proposal + UC-1 brief + UC-2 synthesis (injected as context)
+- Input: full input document + confirmed proposal + UC-1 brief + UC-2 synthesis (injected as context)
 - Output: product spec (markdown)
 - Agent: `product-specification` skill (SKILL.md as system prompt)
-- **Context-injection mode:** The skill's interactive interview is bypassed. The orchestrator prepends all upstream context as pre-filled answers and instructs the skill to generate the PRD directly.
+- **Context-injection mode:** The skill's interactive interview is bypassed. The orchestrator prepends the full document and all upstream research as pre-filled answers and instructs the skill to generate the PRD directly.
 
 ### UC-4: User Story Generation
 The agent breaks the product spec into structured epics and user stories.

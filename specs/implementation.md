@@ -10,9 +10,11 @@ High-level phases. Each phase will be broken into detailed tasks separately.
 
 **Scope:**
 
-- **Pre-step:** A fast Claude call extracts 2–3 competitor names and a target persona from the raw user idea, providing precise inputs to the downstream skills.
+- **Input:** A free-form markdown document (`idea.md` by default, or any `.md` file passed as a CLI argument). The full document content is passed as context to every pipeline step, giving the agent rich input from the start.
 
-- **Brave Search tool:** Implemented as a `web_search` tool (Brave Search API free tier) available to UC-1 and UC-2. Claude decides when and what to search, replicating the Claude.ai experience via the API.
+- **Pre-step:** A fast Claude call reads the input document and extracts 2–3 competitor names and a target persona, providing precise inputs to the downstream skills.
+
+- **Anthropic hosted web search:** Declared as `web_search_20250305` tool available to UC-1 and UC-2. Executed server-side by Anthropic — no extra API key or dependency required.
 
 - **Skill invocation:** Each skill's `SKILL.md` is used as the Claude API system prompt. The orchestrator runs an agentic tool-use loop (send → handle tool calls → repeat until `end_turn`) for each skill. A pipeline-mode suffix appended to every skill prompt instructs Claude to output markdown and skip interactive steps.
 
