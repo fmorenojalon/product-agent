@@ -37,10 +37,10 @@ A short suffix appended to every skill system prompt instructs Claude to output 
 
 ## Web Search
 
-- **Brave Search API** (free tier — 2,000 queries/month)
-- Implemented as a `web_search` tool passed to Claude in each skill call
+- **Anthropic hosted web search** (`web_search_20250305` tool)
+- No extra API key or dependency — billed through the existing Anthropic API account
+- Declared as a tool in each skill call; Anthropic executes searches server-side and embeds results in the response
 - Claude decides when and what to search, exactly as in Claude.ai
-- API key stored in `.env` as `BRAVE_API_KEY`
 
 ## Integrations
 
@@ -69,8 +69,7 @@ output/
 ## Language & Runtime
 
 - **Python 3.11+**
-- `anthropic` — Claude API SDK
-- `httpx` — Brave Search HTTP calls
+- `anthropic` — Claude API SDK (includes hosted web search)
 - `python-dotenv` — secrets management (`.env`, never committed)
 
 ## Configuration

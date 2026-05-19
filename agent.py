@@ -1,25 +1,11 @@
 import os
-import json
-import httpx
 from anthropic import Anthropic
 
 client = Anthropic()
 MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 
-SEARCH_TOOL = {
-    "name": "web_search",
-    "description": (
-        "Search the web for current information about products, companies, "
-        "user feedback, market data, and competitors."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "The search query to execute"}
-        },
-        "required": ["query"],
-    },
-}
+# Anthropic's hosted web search — executed server-side, no extra API key needed
+SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search"}
 
 # Appended to every skill system prompt when running via API
 _API_MODE_SUFFIX = """
@@ -32,32 +18,6 @@ PIPELINE MODE: You are running via the Claude API inside an automated orchestrat
 """
 
 
-def brave_search(query: str) -> str:
-    api_key = os.environ["BRAVE_API_KEY"]
-    try:
-        resp = httpx.get(
-            "https://api.search.brave.com/res/v1/web/search",
-            headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
-            params={"q": query, "count": 10},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        results = resp.json().get("web", {}).get("results", [])
-        return json.dumps(
-            [
-                {
-                    "title": r["title"],
-                    "url": r["url"],
-                    "description": r.get("description", ""),
-                }
-                for r in results[:10]
-            ],
-            indent=2,
-        )
-    except Exception as exc:
-        return json.dumps({"error": str(exc)})
-
-
 def _strip_frontmatter(text: str) -> str:
     """Remove YAML frontmatter (--- ... ---) from SKILL.md files."""
     if text.startswith("---"):
@@ -68,7 +28,11 @@ def _strip_frontmatter(text: str) -> str:
 
 
 def run_skill(skill_path: str, user_message: str, extra_context: str = "") -> str:
-    """Run a skill using its SKILL.md as system prompt with an agentic tool-use loop."""
+    """Run a skill using its SKILL.md as system prompt with an agentic tool-use loop.
+
+    Anthropic's web_search tool is executed server-side: results are embedded in the
+    response content, so we just append each turn and loop until end_turn.
+    """
     raw = open(f"{skill_path}/SKILL.md").read()
     system_prompt = _strip_frontmatter(raw) + _API_MODE_SUFFIX
 
@@ -90,22 +54,9 @@ def run_skill(skill_path: str, user_message: str, extra_context: str = "") -> st
             )
 
         if response.stop_reason == "tool_use":
+            # Search results are already in response.content (server-side execution).
+            # Append the full turn and let Claude continue.
             messages.append({"role": "assistant", "content": response.content})
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use" and block.name == "web_search":
-                    result = brave_search(block.input["query"])
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": result,
-                        }
-                    )
-            if tool_results:
-                messages.append({"role": "user", "content": tool_results})
-            else:
-                break
         else:
             break
 
