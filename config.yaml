@@ -1,0 +1,9 @@
+model: claude-sonnet-4-6
+
+# Phase 2: Discord connector
+discord:
+  channels: []  # list of Discord channel IDs to read feedback from
+
+# Phase 2: Notion connector
+notion:
+  database_id: ""  # Notion database ID where user stories will be created

@@ -5,51 +5,84 @@
 **Custom Python orchestrator** built directly on the Anthropic SDK.
 
 - No external agent framework. The orchestrator is a single Python module that sequences agent calls, passes shared context between them, and surfaces errors.
-- Each of the five skills (`product-analysis`, `product-user-feedback`, `product-roadmap-fit`, `product-specification`, `product-user-story`) is invoked as a sub-agent via its existing script, called through direct import or subprocess.
-- A shared context dictionary is built up as the pipeline runs and passed forward to each subsequent agent.
+- Each skill is invoked by reading its `SKILL.md` as a Claude API system prompt, with the user message carrying the task input and any upstream context.
+- A shared context dict is built up as the pipeline runs and passed forward to each subsequent agent.
 
 ```
 orchestrator.py
-  ├── calls product-analysis/      (research agent)
-  ├── calls product-user-feedback/ (feedback agent)
-  ├── calls product-specification/ (spec agent)
-  └── calls product-user-story/    (user story agent → Notion)
+  ├── pre-step: competitor + persona extraction  (plain Claude call)
+  ├── calls product-analysis/      (UC-1 — parallel)
+  ├── calls product-user-feedback/ (UC-2 — parallel)
+  ├── synthesis + proposal generation           (plain Claude call)
+  ├── [human gate]
+  ├── calls product-specification/ (UC-3 — context-injection mode)
+  └── calls product-user-story/    (UC-4 — context-injection mode)
 ```
+
+## Skill Invocation Model
+
+Each skill's `SKILL.md` is read at runtime and used as the Claude API system prompt. No separate Python wrapper scripts — the orchestrator handles the agentic tool-use loop directly:
+
+1. Send system prompt (SKILL.md) + user message to Claude API
+2. If Claude calls a tool (`web_search`), execute it and feed results back
+3. Repeat until Claude returns a final text response (stop_reason = `end_turn`)
+
+A short suffix appended to every skill system prompt instructs Claude to output markdown (not PDF/DOCX) and skip interactive interview steps when running in pipeline mode.
 
 ## AI Model
 
 - **Claude** (Anthropic) — all agents call the Claude API
-- Recommended model: `claude-sonnet-4-6` for cost/quality balance across pipeline steps
-- Each agent turn is an independent API call; the orchestrator owns context accumulation
+- Default model: `claude-sonnet-4-6` (configurable in `config.yaml`)
+- Each skill runs in its own agentic loop; the orchestrator owns context accumulation and handoff
+
+## Web Search
+
+- **Brave Search API** (free tier — 2,000 queries/month)
+- Implemented as a `web_search` tool passed to Claude in each skill call
+- Claude decides when and what to search, exactly as in Claude.ai
+- API key stored in `.env` as `BRAVE_API_KEY`
 
 ## Integrations
 
-Integrations are implemented as skill scripts (not an MCP server), keeping the integration surface simple and replaceable.
+Integrations are implemented as connector scripts in `connectors/`, keeping the integration surface simple and replaceable.
 
-| Integration | Purpose | Implementation |
-|---|---|---|
-| **Discord** | Read recent user feedback from configured channels | Python script using Discord REST API |
-| **Notion** | Create tasks / user stories from pipeline output | Python script using Notion API |
+| Integration | Purpose | Phase 1 | Phase 2 |
+|---|---|---|---|
+| **Discord** | Read recent user feedback from configured channels | Mock (fixture data) | Real — Discord REST API |
+| **Notion** | Create user stories as database rows | Mock (stdout) | Real — Notion API |
 
-Additional connectors (Intercom, App Store, etc.) will follow the same skill-script pattern in a later phase.
+## Output Format
+
+All pipeline outputs are saved as markdown files in a timestamped folder under `output/`:
+
+```
+output/
+└── 2026-05-19_my-product-idea/
+    ├── research-brief.md        # UC-1 competitive research
+    ├── feedback-synthesis.md    # UC-2 user feedback report
+    ├── product-spec.md          # UC-3 product specification
+    └── user-stories.md          # UC-4 user stories
+```
+
+`.docx` generation is out of scope for the PoC. The markdown output is the primary deliverable.
 
 ## Language & Runtime
 
 - **Python 3.11+**
-- `anthropic` SDK for all Claude API calls
-- `httpx` or `requests` for integration scripts
-- `python-dotenv` for secrets management (API keys in `.env`, never committed)
-
-## Observability (Phase 3)
-
-Built into the orchestrator itself — no third-party APM required for the PoC:
-
-- **Latency**: wall-clock time recorded around each agent call
-- **Cost attribution**: input/output token counts from each API response, mapped to agent name and task ID
-- **Handoff quality**: structured output from each agent is validated before passing to the next (schema check or confidence score)
-- All metrics written to a local JSONL log file; queryable with standard tooling
+- `anthropic` — Claude API SDK
+- `httpx` — Brave Search HTTP calls
+- `python-dotenv` — secrets management (`.env`, never committed)
 
 ## Configuration
 
-- API keys and connector credentials in `.env`
-- Pipeline behaviour (model, enabled agents, Notion workspace, Discord channels) in `config.yaml`
+- Pipeline settings (model, Discord channels, Notion workspace) in `config.yaml`
+- Secrets (API keys) in `.env`
+
+## Observability (Phase 3)
+
+Built into the orchestrator — no third-party APM required for the PoC:
+
+- **Latency:** wall-clock time per agent call and per pipeline step
+- **Cost attribution:** token counts from each Claude API response, mapped to agent name + task ID, converted to estimated USD
+- **Handoff quality:** structured output validated at each handoff; degraded outputs surface warnings
+- Metrics written to `output/<run>/run-metrics.jsonl`; summary printed at pipeline end

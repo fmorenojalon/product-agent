@@ -18,14 +18,18 @@ Product decisions require synthesizing fragmented inputs — market research, us
 
 The pipeline has two distinct phases separated by a human decision gate:
 
-**Phase A — Research (parallel):** Both research agents run simultaneously from the user's initial idea.  
+**Pre-step:** A fast Claude call extracts competitor names and a target persona from the raw idea, so downstream skills receive precise inputs.  
+**Phase A — Research (parallel):** Both research agents run simultaneously.  
 **Human gate:** The orchestrator synthesizes the research into 2–3 product direction proposals; the user confirms one.  
-**Phase B — Specification (sequential):** Spec drafting and user story generation run in sequence using the confirmed direction as input.
+**Phase B — Specification (sequential):** Spec drafting runs first, then user story generation uses its output.
 
 ```
 User prompt (idea / hypothesis)
+    │
+    ├─► [Pre-step] Extract competitors + persona  (Claude API call, ~2s)
+    │
     ├─► UC-1: Competitive research       (product-analysis)        ┐ run in
-    └─► UC-2: User feedback synthesis   (product-user-feedback)    ┘ parallel
+    └─► UC-2: User feedback synthesis    (product-user-feedback)   ┘ parallel
                     │
             [Orchestrator synthesizes both outputs]
                     │
@@ -33,66 +37,78 @@ User prompt (idea / hypothesis)
                     │
               [Human confirms one]
                     │
-            ├─► UC-3: Spec drafting      (product-specification)
-            └─► UC-4: User stories       (product-user-story → Notion)
+            UC-3: Spec drafting          (product-specification)
+                    │
+            UC-4: User story generation  (product-user-story → Notion)
 ```
 
 ## In-Scope Use Cases (PoC)
 
-### UC-1: Competitive Research
-The agent accepts a product idea or feature hypothesis and produces a structured research brief covering the competitive landscape, market positioning of comparable products, and relevant technical and commercial signals.
+### Pre-step: Competitor & Persona Extraction
+A fast Claude API call interprets the user's raw idea and returns the 2–3 most relevant competitor products to research and the primary target persona. This bridges the gap between a vague idea and the specific inputs the skills expect.
 
-- Input: free-text idea or feature hypothesis from the user
-- Output: structured research brief (markdown) — competitors, positioning, key signals
-- Agent: `product-analysis` (existing skill)
+- Input: free-text idea from the user
+- Output: `{ competitors: [...], persona: "..." }` (JSON, used internally)
+- No skill — single orchestrator Claude call, no tools
+
+### UC-1: Competitive Research
+The agent produces a structured research brief covering the competitive landscape, market positioning, and relevant technical and commercial signals for the identified competitors.
+
+- Input: idea + extracted competitor names
+- Output: research brief (markdown)
+- Agent: `product-analysis` skill (SKILL.md as system prompt via Claude API)
+- Tools: Brave Search (web search)
 - Runs in parallel with UC-2
 
 ### UC-2: User Feedback Synthesis
-The agent researches publicly available user feedback on comparable products and distills it into key themes, sentiment signals, and quoted evidence relevant to the idea under evaluation.
+The agent researches publicly available user feedback on comparable products and distills it into key themes, sentiment signals, and quoted evidence relevant to the idea.
 
-- Input: idea or product area to investigate (same prompt as UC-1)
-- Output: feedback synthesis report (markdown) covering Reddit, forums, and app store reviews
-- Agent: `product-user-feedback` (existing skill — sources via web search)
+- Input: idea + extracted competitors + persona
+- Output: feedback synthesis report (markdown)
+- Agent: `product-user-feedback` skill (SKILL.md as system prompt via Claude API)
+- Tools: Brave Search (web search)
 - Runs in parallel with UC-1
-- **New work — Discord connector:** Reading user feedback from Discord channels requires a new connector script that fetches recent messages from configured channels and injects them into the skill's synthesis step. Implemented in Phase 2.
+- **New work — Discord connector:** Implemented in Phase 2. Phase 1 uses a mock connector returning fixture data.
 
 ### Synthesis & Proposal Generation (Orchestrator step)
-Once UC-1 and UC-2 complete, the orchestrator synthesizes both outputs and generates 2–3 distinct product direction proposals for the user to choose from. Each proposal includes a one-paragraph rationale grounded in the research.
+Once UC-1 and UC-2 complete, the orchestrator synthesizes both outputs and generates 2–3 distinct product direction proposals. Each proposal includes a short name and rationale grounded in the research.
 
-- Input: UC-1 research brief + UC-2 feedback synthesis
-- Output: 2–3 labelled product direction proposals presented in the CLI
-- **This is new orchestrator logic** — not covered by any existing skill. Implemented as a single Claude API call with both research artifacts as context.
-- The user selects or refines one proposal before the pipeline continues.
+- Input: UC-1 brief + UC-2 synthesis
+- Output: 2–3 labelled proposals printed to CLI
+- New orchestrator logic — single Claude API call, no tools, no skill
 
 ### UC-3: Spec Drafting
-Given the confirmed product direction and the research context, the agent generates a product specification document.
+Given the confirmed direction and research context, the agent generates a product specification document.
 
 - Input: confirmed proposal + UC-1 brief + UC-2 synthesis (injected as context)
-- Output: product spec document (.docx)
-- Agent: `product-specification` (existing skill)
-- **Note:** This skill is interview-driven by design. In the pipeline, the orchestrator runs it in context-injection mode: upstream outputs and the confirmed direction are provided as pre-filled answers, bypassing the interactive interview. This behavior needs to be validated.
+- Output: product spec (markdown)
+- Agent: `product-specification` skill (SKILL.md as system prompt)
+- **Context-injection mode:** The skill's interactive interview is bypassed. The orchestrator prepends all upstream context as pre-filled answers and instructs the skill to generate the PRD directly.
 
 ### UC-4: User Story Generation
-The agent breaks the confirmed product spec into structured epics and user stories.
+The agent breaks the product spec into structured epics and user stories.
 
 - Input: product spec from UC-3
-- Output: user stories as a structured document (.docx)
-- Agent: `product-user-story` (existing skill)
-- **New work — Notion integration:** The existing skill outputs a `.docx` file. Pushing user stories to Notion as database rows is net-new development, implemented as a separate connector script called after the skill completes. Implemented in Phase 2.
+- Output: epics and user stories (markdown)
+- Agent: `product-user-story` skill (SKILL.md as system prompt)
+- **Context-injection mode:** The skill's mandatory clarification step is bypassed via the same API-mode instruction.
+- **New work — Notion integration:** Implemented in Phase 2. Phase 1 uses a mock connector that prints to stdout.
 
 ## Out of Scope (PoC)
 
-- Roadmap fit assessment (`product-roadmap-fit` skill exists but is deferred to a later phase)
-- Additional feedback connectors beyond Discord (e.g. Intercom — the existing skill already covers public app store reviews via web search)
+- Roadmap fit assessment (`product-roadmap-fit` skill deferred to a later phase)
+- Additional feedback connectors beyond Discord (Intercom, etc.)
 - Approval workflows or stakeholder routing beyond the proposal selection gate
-- Custom UI — interaction is CLI-first for the PoC
+- Custom UI — interaction is CLI-first
 
 ## New Development Required (beyond existing skills)
 
 | Component | Type | Phase |
 |---|---|---|
 | Custom Python orchestrator | New | Phase 1 |
-| Orchestrator synthesis + proposal generation step | New | Phase 1 |
+| Pre-step: competitor + persona extraction | New | Phase 1 |
+| Brave Search tool integration | New | Phase 1 |
+| Orchestrator synthesis + proposal generation | New | Phase 1 |
 | Discord connector script | New | Phase 2 |
 | Notion connector script | New | Phase 2 |
 | Observability layer (latency, cost, handoff metrics) | New | Phase 3 |
@@ -104,6 +120,7 @@ The agent breaks the confirmed product spec into structured epics and user stori
 | UC-1 and UC-2 run in parallel from a single prompt | Phase 1 |
 | Orchestrator presents 2–3 grounded proposals after research | Phase 1 |
 | Spec and user stories generated after user confirms a direction | Phase 1 |
+| All outputs saved as markdown files in a timestamped output/ folder | Phase 1 |
 | User stories appear in Notion after a single end-to-end run | Phase 2 |
 | Discord feedback included in UC-2 synthesis | Phase 2 |
 | Per-task cost and latency tracked and attributable per agent | Phase 3 |
