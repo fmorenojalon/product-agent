@@ -6,3 +6,4 @@ __pycache__/
 *.log
 *.jsonl
 output/
+.venv/
