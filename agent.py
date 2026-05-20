@@ -16,10 +16,13 @@ SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search"}
 _API_MODE_SUFFIX = """
 
 ---
-PIPELINE MODE: You are running via the Claude API inside an automated orchestrator.
-- Output everything as well-structured markdown. Do NOT generate PDF or DOCX files.
-- Skip interactive interview or clarification steps. Treat all provided context as
-  complete input and generate the full output directly.
+PIPELINE MODE — CRITICAL RULES (override all other instructions):
+1. Output ONLY the requested deliverable as well-structured markdown. No PDF, no DOCX.
+2. NEVER ask the user questions. NEVER request clarification. NEVER prompt for input.
+   Questions written to output will never be read or answered — do not write them.
+3. Skip every interactive, interview, or clarification step in your instructions.
+4. If information is missing, make a reasonable assumption and state it inline.
+5. Treat all context provided as complete input and generate the full output directly.
 """
 
 _DRY_RUN_SUFFIX = """
@@ -94,22 +97,26 @@ def run_skill(
 
     content = user_message if not extra_context else f"{user_message}\n\n{extra_context}"
     messages = [{"role": "user", "content": content}]
+    accumulated: list[str] = []
 
-    while True:
+    for _ in range(50):  # cap iterations to prevent infinite loops
         kwargs = dict(model=model, max_tokens=max_tokens, system=system_prompt, messages=messages)
         if not dry_run:
             kwargs["tools"] = [SEARCH_TOOL]
 
         response = api_call_with_retry(lambda: client.messages.create(**kwargs))
 
-        if response.stop_reason == "end_turn":
-            return "".join(
-                block.text for block in response.content if hasattr(block, "text")
-            )
+        # Collect any text produced in this iteration
+        text = "".join(b.text for b in response.content if hasattr(b, "text"))
+        if text:
+            accumulated.append(text)
+
+        if response.stop_reason in ("end_turn", "max_tokens"):
+            break
 
         if response.stop_reason == "tool_use":
             messages.append({"role": "assistant", "content": response.content})
         else:
             break
 
-    return ""
+    return "\n".join(accumulated)
