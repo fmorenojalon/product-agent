@@ -100,8 +100,8 @@ def run_research(
 
 def generate_proposals(document: str, research: str, feedback: str, dry_run: bool = False) -> str:
     """Synthesize UC-1 + UC-2 outputs into 2-3 product direction proposals."""
-    # Truncate to keep combined context within rate limits
-    max_chars = 2000 if dry_run else 10000
+    # Truncate to control downstream token cost (search results accumulate fast)
+    max_chars = 2000 if dry_run else 3000
     return _llm([{
         "role": "user",
         "content": (
@@ -124,7 +124,7 @@ def run_spec(
     document: str, chosen_direction: str, research: str, feedback: str, dry_run: bool = False
 ) -> str:
     """UC-3: product-specification in context-injection mode."""
-    max_chars = 2000 if dry_run else 10000
+    max_chars = 2000 if dry_run else 3000
     extra = (
         "PIPELINE CONTEXT — skip the interactive interview and generate the PRD "
         "directly using the information below as pre-filled answers.\n\n"
