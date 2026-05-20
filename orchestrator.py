@@ -53,7 +53,7 @@ def _llm(messages: list, step: str = "", dry_run: bool = False) -> str:
 
 def extract_competitors_and_persona(document: str, dry_run: bool = False) -> tuple[list[str], str]:
     """Pre-step: identify key competitors and target persona from the input document."""
-    return _parse_json(_llm([{
+    data = _parse_json(_llm([{
         "role": "user",
         "content": (
             "Read the following product idea document and extract:\n"
@@ -65,6 +65,7 @@ def extract_competitors_and_persona(document: str, dry_run: bool = False) -> tup
             f"## Product Idea Document\n\n{document}"
         ),
     }], step="pre_step", dry_run=dry_run))
+    return data["competitors"], data["persona"]
 
 
 def run_research(
