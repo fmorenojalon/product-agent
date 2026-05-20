@@ -132,27 +132,20 @@ The richer the document, the more grounded the proposals and spec will be.
 
 ## Configuration
 
-Each pipeline step has its own model and token limit in `config.yaml`:
+### Run profiles
 
-```yaml
-steps:
-  pre_step:   { model: claude-haiku-4-5-20251001, max_tokens: 512  }
-  research:   { model: claude-haiku-4-5-20251001, max_tokens: 4000 }
-  feedback:   { model: claude-haiku-4-5-20251001, max_tokens: 4000 }
-  synthesis:  { model: claude-haiku-4-5-20251001, max_tokens: 2048 }
-  spec:       { model: claude-haiku-4-5-20251001, max_tokens: 4000 }
-  stories:    { model: claude-haiku-4-5-20251001, max_tokens: 4000 }
-```
+At startup you are prompted to choose a run profile. Profiles are defined in `config.yaml` and control the model, token budget, and web-search limit for each pipeline step.
 
-Swap any step to `claude-sonnet-4-6` for higher quality. Rough cost guidance:
+| # | Name | Est. cost/run | Notes |
+|---|---|---|---|
+| 1 | Test — pipeline validation | $0.01–0.04 | Haiku, no search, short placeholder output. Validates the full pipeline runs end-to-end. |
+| 2 | Budget — full run, all Haiku | $0.30–0.50 | Complete pipeline with web search using the fastest, cheapest model. |
+| 3 | Balanced — Sonnet for quality steps | $1.00–1.80 | Sonnet for research, feedback, spec, and stories. Best cost/quality trade-off. |
+| 4 | Optimal — Opus for research, Sonnet elsewhere | $3.00–5.00 | Deepest research quality. Recommended for high-stakes decisions. |
 
-| Config | Est. cost/run |
-|---|---|
-| All Haiku | $0.15–0.25 |
-| Haiku + Sonnet for research & feedback | $0.40–0.60 |
-| All Sonnet | $1.50–2.50 |
+Each profile configures per-step `model`, `max_tokens`, and `max_searches`. To customise, edit `config.yaml` directly.
 
-Other settings:
+### Other settings
 
 | Key | Description |
 |---|---|
