@@ -252,7 +252,7 @@ def save_outputs(
     title: str, research: str, feedback: str, spec: str, stories: str
 ) -> Path:
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
-    folder = Path("output") / f"{datetime.now().strftime('%Y-%m-%d')}_{slug}"
+    folder = Path("output") / f"{datetime.now().strftime('%Y-%m-%d_%H-%M')}_{slug}"
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "research-brief.md").write_text(research)
     (folder / "feedback-synthesis.md").write_text(feedback)
