@@ -109,8 +109,9 @@ def run_skill(
     accumulated: list[str] = []
     search_count = 0
 
+    continuing = False
     for _ in range(50):
-        use_search = not brief and max_searches > 0 and search_count < max_searches
+        use_search = not brief and not continuing and max_searches > 0 and search_count < max_searches
         kwargs = dict(model=model, max_tokens=max_tokens, system=system_prompt, messages=messages)
         if use_search:
             kwargs["tools"] = [SEARCH_TOOL]
@@ -125,10 +126,15 @@ def run_skill(
         if text:
             accumulated.append(text)
 
-        if response.stop_reason in ("end_turn", "max_tokens"):
+        if response.stop_reason == "end_turn":
             break
-
-        if response.stop_reason == "tool_use":
+        elif response.stop_reason == "max_tokens":
+            # Output was cut off — continue generation from where it stopped
+            continuing = True
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": "Continue."})
+        elif response.stop_reason == "tool_use":
+            continuing = False
             messages.append({"role": "assistant", "content": response.content})
         else:
             break

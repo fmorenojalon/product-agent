@@ -139,9 +139,9 @@ At startup you are prompted to choose a run profile. Profiles are defined in `co
 | # | Name | Est. cost/run | Notes |
 |---|---|---|---|
 | 1 | Test — pipeline validation | $0.01–0.04 | Haiku, no search, short placeholder output. Validates the full pipeline runs end-to-end. |
-| 2 | Budget — full run, all Haiku | $0.30–0.50 | Complete pipeline with web search using the fastest, cheapest model. |
-| 3 | Balanced — Sonnet for quality steps | $1.00–1.80 | Sonnet for research, feedback, spec, and stories. Best cost/quality trade-off. |
-| 4 | Optimal — Opus for research, Sonnet elsewhere | $3.00–5.00 | Deepest research quality. Recommended for high-stakes decisions. |
+| 2 | Budget — full run, all Haiku | $0.30–0.60 | Complete pipeline with web search using the fastest, cheapest model. |
+| 3 | Balanced — Sonnet for quality steps | $1.20–2.00 | Sonnet for research, feedback, spec, and stories. Best cost/quality trade-off. |
+| 4 | Optimal — Opus for research, Sonnet elsewhere | $3.50–6.00 | Deepest research quality. Recommended for high-stakes decisions. |
 
 Each profile configures per-step `model`, `max_tokens`, and `max_searches`. To customise, edit `config.yaml` directly.
 
