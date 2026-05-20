@@ -2,6 +2,7 @@
 import sys
 import json
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -32,10 +33,17 @@ def _divider(label: str = "") -> None:
         print(line)
 
 
-def _truncate(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars] + "\n\n[output truncated]"
+def compress(text: str, purpose: str, profile: dict) -> str:
+    """Compress a large research/feedback/spec output to a dense summary using Haiku."""
+    return _llm([{
+        "role": "user",
+        "content": (
+            f"Compress the following {purpose} into 400–600 words of dense bullet-points. "
+            "Preserve every specific fact, metric, competitor name, and actionable finding. "
+            "Remove narrative prose, transitions, and duplicates only.\n\n"
+            f"{text}"
+        ),
+    }], step="compress", profile=profile)
 
 
 def _llm(messages: list, step: str = "", profile: dict | None = None) -> str:
@@ -104,9 +112,8 @@ def _parse_questions(text: str) -> list[str]:
 
 
 def run_interactive_interview(
-    document: str, research: str, feedback: str, chosen_direction: str, profile: dict
+    document: str, research_ctx: str, feedback_ctx: str, chosen_direction: str, profile: dict
 ) -> str:
-    max_chars = 2000 if profile.get("brief_mode") else 3000
     questions_text = _llm([{
         "role": "user",
         "content": (
@@ -122,8 +129,8 @@ def run_interactive_interview(
             "- Output numbered questions only — no preamble, no explanation\n\n"
             f"## Product Idea Document\n\n{document}\n\n"
             f"## Chosen Product Direction\n\n{chosen_direction}\n\n"
-            f"## Competitive Research\n\n{_truncate(research, max_chars)}\n\n"
-            f"## User Feedback\n\n{_truncate(feedback, max_chars)}"
+            f"## Competitive Research\n\n{research_ctx}\n\n"
+            f"## User Feedback\n\n{feedback_ctx}"
         ),
     }], step="pre_step", profile=profile)
 
@@ -186,16 +193,14 @@ def run_research(
     return research, feedback
 
 
-def generate_proposals(document: str, research: str, feedback: str, profile: dict) -> str:
-    brief = profile.get("brief_mode", False)
-    max_chars = 2000 if brief else 3000
+def generate_proposals(document: str, research_ctx: str, feedback_ctx: str, profile: dict) -> str:
     return _llm([{
         "role": "user",
         "content": (
             "## Product Idea Document\n\n"
             f"{document}\n\n"
-            f"## Competitive Research\n\n{_truncate(research, max_chars)}\n\n"
-            f"## User Feedback\n\n{_truncate(feedback, max_chars)}\n\n"
+            f"## Competitive Research\n\n{research_ctx}\n\n"
+            f"## User Feedback\n\n{feedback_ctx}\n\n"
             "Based on the product idea and research above, generate 2-3 distinct "
             "product direction proposals.\n"
             "For each proposal include:\n"
@@ -208,18 +213,16 @@ def generate_proposals(document: str, research: str, feedback: str, profile: dic
 
 
 def run_spec(
-    document: str, chosen_direction: str, research: str, feedback: str, profile: dict,
+    document: str, chosen_direction: str, research_ctx: str, feedback_ctx: str, profile: dict,
     interview_context: str = "",
 ) -> str:
-    brief = profile.get("brief_mode", False)
-    max_chars = 2000 if brief else 3000
     extra = (
         "PIPELINE CONTEXT — skip the interactive interview and generate the PRD "
         "directly using the information below as pre-filled answers.\n\n"
         f"## Product Idea Document\n\n{document}\n\n"
         f"## Confirmed product direction\n\n{chosen_direction}\n\n"
-        f"## Competitive research\n\n{_truncate(research, max_chars)}\n\n"
-        f"## User feedback synthesis\n\n{_truncate(feedback, max_chars)}"
+        f"## Competitive research\n\n{research_ctx}\n\n"
+        f"## User feedback synthesis\n\n{feedback_ctx}"
     )
     if interview_context:
         extra += f"\n\n{interview_context}"
@@ -285,12 +288,34 @@ def main() -> None:
 
     # Phase A — parallel research
     print("[ Phase A ] Competitive research + user feedback...")
+    phase_a_start = time.time()
     research, feedback = run_research(document, competitors, persona, profile)
     print()
 
+    # Compress Phase A outputs — one Haiku call each produces a dense summary
+    # used by all downstream steps instead of raw-truncating
+    if not brief:
+        print("[ Compress ] Summarizing research and feedback...")
+        research_ctx = compress(research, "competitive research report", profile)
+        feedback_ctx = compress(feedback, "user feedback synthesis", profile)
+        print("  ✓ Summaries ready\n")
+    else:
+        research_ctx = research
+        feedback_ctx = feedback
+
+    # Smart cooldown — Phase B triggers a fresh Sonnet call; if Phase A finished
+    # in under 65s the tokens-per-minute bucket may still be close to its limit.
+    if not brief:
+        elapsed = time.time() - phase_a_start
+        remaining = int(65 - elapsed)
+        if remaining > 0:
+            print(f"[ Cooldown ] Waiting {remaining}s for rate limit window to reset...")
+            time.sleep(remaining)
+            print()
+
     # Synthesis
     print("[ Synthesis ] Generating product direction proposals...")
-    proposals = generate_proposals(document, research, feedback, profile)
+    proposals = generate_proposals(document, research_ctx, feedback_ctx, profile)
     _divider()
     print(proposals)
     _divider()
@@ -305,12 +330,12 @@ def main() -> None:
     interview_context = ""
     if interactive:
         interview_context = run_interactive_interview(
-            document, research, feedback, chosen, profile
+            document, research_ctx, feedback_ctx, chosen, profile
         )
 
     # Phase B — sequential
     print("[ Phase B ] Drafting product spec...")
-    spec = run_spec(document, chosen, research, feedback, profile, interview_context)
+    spec = run_spec(document, chosen, research_ctx, feedback_ctx, profile, interview_context)
     print("  ✓ Spec complete\n")
 
     print("[ Phase B ] Generating user stories...")
