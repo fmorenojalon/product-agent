@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 load_dotenv()
 
-from agent import client, MODEL, run_skill
+from agent import client, MODEL, DRY_RUN_MODEL, DRY_RUN_MAX_TOKENS, api_call_with_retry, run_skill
 from connectors.discord import fetch_feedback
 from connectors.notion import push_stories
 
@@ -30,32 +30,43 @@ def _divider(label: str = "") -> None:
         print(line)
 
 
+def _truncate(text: str, max_chars: int) -> str:
+    """Cap long outputs before passing as context to prevent rate limit errors."""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n\n[output truncated]"
+
+
+def _llm(messages: list, max_tokens: int = 2048, dry_run: bool = False) -> str:
+    """Direct Claude API call with retry and dry-run support."""
+    model = DRY_RUN_MODEL if dry_run else MODEL
+    actual_max = DRY_RUN_MAX_TOKENS if dry_run else max_tokens
+    response = api_call_with_retry(
+        lambda: client.messages.create(model=model, max_tokens=actual_max, messages=messages)
+    )
+    return response.content[0].text
+
+
 # ── Pipeline steps ────────────────────────────────────────────────────────────
 
-def extract_competitors_and_persona(document: str) -> tuple[list[str], str]:
+def extract_competitors_and_persona(document: str, dry_run: bool = False) -> tuple[list[str], str]:
     """Pre-step: identify key competitors and target persona from the input document."""
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=512,
-        messages=[{
-            "role": "user",
-            "content": (
-                "Read the following product idea document and extract:\n"
-                '- "competitors": array of 3 existing product or company names '
-                "most relevant to research for this idea\n"
-                '- "persona": string describing the primary target user '
-                '(e.g. "project manager", "indie developer")\n\n'
-                "Return only valid JSON, no explanation.\n\n"
-                f"## Product Idea Document\n\n{document}"
-            ),
-        }],
-    )
-    data = _parse_json(response.content[0].text)
-    return data["competitors"], data["persona"]
+    return _parse_json(_llm([{
+        "role": "user",
+        "content": (
+            "Read the following product idea document and extract:\n"
+            '- "competitors": array of 3 existing product or company names '
+            "most relevant to research for this idea\n"
+            '- "persona": string describing the primary target user '
+            '(e.g. "project manager", "indie developer")\n\n'
+            "Return only valid JSON, no explanation.\n\n"
+            f"## Product Idea Document\n\n{document}"
+        ),
+    }], dry_run=dry_run))
 
 
 def run_research(
-    document: str, competitors: list[str], persona: str
+    document: str, competitors: list[str], persona: str, dry_run: bool = False
 ) -> tuple[str, str]:
     """UC-1 and UC-2 run concurrently."""
     uc1_msg = (
@@ -73,8 +84,8 @@ def run_research(
     results: dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {
-            executor.submit(run_skill, "product-analysis", uc1_msg): "research",
-            executor.submit(run_skill, "product-user-feedback", uc2_msg): "feedback",
+            executor.submit(run_skill, "product-analysis", uc1_msg, "", dry_run): "research",
+            executor.submit(run_skill, "product-user-feedback", uc2_msg, "", dry_run): "feedback",
         }
         for future in as_completed(futures):
             key = futures[future]
@@ -85,55 +96,55 @@ def run_research(
     return results["research"], results["feedback"]
 
 
-def generate_proposals(document: str, research: str, feedback: str) -> str:
+def generate_proposals(document: str, research: str, feedback: str, dry_run: bool = False) -> str:
     """Synthesize UC-1 + UC-2 outputs into 2-3 product direction proposals."""
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=2048,
-        messages=[{
-            "role": "user",
-            "content": (
-                "## Product Idea Document\n\n"
-                f"{document}\n\n"
-                f"## Competitive Research\n\n{research}\n\n"
-                f"## User Feedback\n\n{feedback}\n\n"
-                "Based on the product idea and research above, generate 2-3 distinct "
-                "product direction proposals.\n"
-                "For each proposal include:\n"
-                "- A short name (e.g. 'Option 1 — Contextual AI Suggestions')\n"
-                "- 2-3 sentences describing the direction\n"
-                "- 1-2 sentences grounding it in the research\n\n"
-                "Format them clearly and number them so the user can pick one."
-            ),
-        }],
-    )
-    return response.content[0].text
+    # Truncate to keep combined context within rate limits
+    max_chars = 2000 if dry_run else 10000
+    return _llm([{
+        "role": "user",
+        "content": (
+            "## Product Idea Document\n\n"
+            f"{document}\n\n"
+            f"## Competitive Research\n\n{_truncate(research, max_chars)}\n\n"
+            f"## User Feedback\n\n{_truncate(feedback, max_chars)}\n\n"
+            "Based on the product idea and research above, generate 2-3 distinct "
+            "product direction proposals.\n"
+            "For each proposal include:\n"
+            "- A short name (e.g. 'Option 1 — Contextual AI Suggestions')\n"
+            "- 2-3 sentences describing the direction\n"
+            "- 1-2 sentences grounding it in the research\n\n"
+            "Format them clearly and number them so the user can pick one."
+        ),
+    }], max_tokens=2048, dry_run=dry_run)
 
 
 def run_spec(
-    document: str, chosen_direction: str, research: str, feedback: str
+    document: str, chosen_direction: str, research: str, feedback: str, dry_run: bool = False
 ) -> str:
     """UC-3: product-specification in context-injection mode."""
+    max_chars = 2000 if dry_run else 10000
     extra = (
         "PIPELINE CONTEXT — skip the interactive interview and generate the PRD "
         "directly using the information below as pre-filled answers.\n\n"
         f"## Product Idea Document\n\n{document}\n\n"
         f"## Confirmed product direction\n\n{chosen_direction}\n\n"
-        f"## Competitive research\n\n{research}\n\n"
-        f"## User feedback synthesis\n\n{feedback}"
+        f"## Competitive research\n\n{_truncate(research, max_chars)}\n\n"
+        f"## User feedback synthesis\n\n{_truncate(feedback, max_chars)}"
     )
     return run_skill(
         "product-specification",
         "Generate a PRD based on the product idea document and research context provided.",
         extra_context=extra,
+        dry_run=dry_run,
     )
 
 
-def run_stories(spec: str) -> str:
+def run_stories(spec: str, dry_run: bool = False) -> str:
     """UC-4: user story generation from the product spec."""
     return run_skill(
         "product-user-story",
         f"Generate epics and user stories for the following product specification:\n\n{spec}",
+        dry_run=dry_run,
     )
 
 
@@ -153,7 +164,10 @@ def save_outputs(
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    input_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("idea.md")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    dry_run = "--dry-run" in sys.argv
+
+    input_path = Path(args[0]) if args else Path("idea.md")
 
     if not input_path.exists():
         print(f"Error: '{input_path}' not found.")
@@ -162,24 +176,27 @@ def main() -> None:
         sys.exit(1)
 
     document = input_path.read_text()
-    title = input_path.stem  # used for output folder naming
+    title = input_path.stem
 
-    print(f"\nProduct Agent  ·  {input_path.name}\n")
+    if dry_run:
+        print(f"\nProduct Agent  ·  {input_path.name}  [DRY RUN — Haiku, no search, minimal output]\n")
+    else:
+        print(f"\nProduct Agent  ·  {input_path.name}\n")
 
     # Pre-step
     print("[ Pre-step ] Identifying competitors and persona...")
-    competitors, persona = extract_competitors_and_persona(document)
+    competitors, persona = extract_competitors_and_persona(document, dry_run)
     print(f"  Competitors : {', '.join(competitors)}")
     print(f"  Persona     : {persona}\n")
 
     # Phase A — parallel research
     print("[ Phase A ] Competitive research + user feedback running in parallel...")
-    research, feedback = run_research(document, competitors, persona)
+    research, feedback = run_research(document, competitors, persona, dry_run)
     print()
 
     # Synthesis
     print("[ Synthesis ] Generating product direction proposals...")
-    proposals = generate_proposals(document, research, feedback)
+    proposals = generate_proposals(document, research, feedback, dry_run)
     _divider()
     print(proposals)
     _divider()
@@ -192,11 +209,11 @@ def main() -> None:
 
     # Phase B — sequential
     print("[ Phase B ] Drafting product spec...")
-    spec = run_spec(document, chosen, research, feedback)
+    spec = run_spec(document, chosen, research, feedback, dry_run)
     print("  ✓ Spec complete\n")
 
     print("[ Phase B ] Generating user stories...")
-    stories = run_stories(spec)
+    stories = run_stories(spec, dry_run)
     print("  ✓ User stories complete\n")
 
     # Notion (mock in Phase 1)
