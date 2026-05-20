@@ -1,31 +1,56 @@
-# Model, token limits, and search limits per pipeline step.
-#
-# Cost guidance (estimated per full run):
-#   current defaults (all haiku, 5 searches) → ~$0.10–0.20
-#   research/feedback on sonnet, 10 searches → ~$0.50–0.80
-#
-# max_searches only applies to steps that use web search (research, feedback).
-steps:
-  pre_step:                         # competitor + persona extraction
-    model: claude-haiku-4-5-20251001
-    max_tokens: 512
-  research:                         # UC-1 competitive research
-    model: claude-haiku-4-5-20251001
-    max_tokens: 1500
-    max_searches: 5
-  feedback:                         # UC-2 user feedback synthesis
-    model: claude-haiku-4-5-20251001
-    max_tokens: 1500
-    max_searches: 5
-  synthesis:                        # proposal generation
-    model: claude-haiku-4-5-20251001
-    max_tokens: 1000
-  spec:                             # UC-3 product specification
-    model: claude-haiku-4-5-20251001
-    max_tokens: 1500
-  stories:                          # UC-4 user story generation
-    model: claude-haiku-4-5-20251001
-    max_tokens: 1500
+profiles:
+
+  "1":
+    name: "Test — pipeline validation"
+    description: "Haiku, no web search, placeholder output. Validates the full pipeline runs end-to-end."
+    estimated_cost: "$0.01–0.04"
+    brief_mode: true
+    steps:
+      pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 512,  max_searches: 0 }
+      research:  { model: claude-haiku-4-5-20251001, max_tokens: 512,  max_searches: 0 }
+      feedback:  { model: claude-haiku-4-5-20251001, max_tokens: 512,  max_searches: 0 }
+      synthesis: { model: claude-haiku-4-5-20251001, max_tokens: 512,  max_searches: 0 }
+      spec:      { model: claude-haiku-4-5-20251001, max_tokens: 512,  max_searches: 0 }
+      stories:   { model: claude-haiku-4-5-20251001, max_tokens: 512,  max_searches: 0 }
+
+  "2":
+    name: "Budget — full run, all Haiku"
+    description: "Complete pipeline with web search. All steps use the fastest, cheapest model."
+    estimated_cost: "$0.30–0.50"
+    brief_mode: false
+    steps:
+      pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 512,  max_searches: 0 }
+      research:  { model: claude-haiku-4-5-20251001, max_tokens: 1500, max_searches: 5 }
+      feedback:  { model: claude-haiku-4-5-20251001, max_tokens: 1500, max_searches: 5 }
+      synthesis: { model: claude-haiku-4-5-20251001, max_tokens: 1000, max_searches: 0 }
+      spec:      { model: claude-haiku-4-5-20251001, max_tokens: 1500, max_searches: 0 }
+      stories:   { model: claude-haiku-4-5-20251001, max_tokens: 1500, max_searches: 0 }
+
+  "3":
+    name: "Balanced — Sonnet for quality steps"
+    description: "Sonnet for research, feedback, spec and stories. Best cost/quality trade-off."
+    estimated_cost: "$1.00–1.80"
+    brief_mode: false
+    steps:
+      pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 512,  max_searches: 0 }
+      research:  { model: claude-sonnet-4-6,          max_tokens: 3000, max_searches: 8 }
+      feedback:  { model: claude-sonnet-4-6,          max_tokens: 3000, max_searches: 8 }
+      synthesis: { model: claude-haiku-4-5-20251001, max_tokens: 1500, max_searches: 0 }
+      spec:      { model: claude-sonnet-4-6,          max_tokens: 3000, max_searches: 0 }
+      stories:   { model: claude-sonnet-4-6,          max_tokens: 3000, max_searches: 0 }
+
+  "4":
+    name: "Optimal — Opus for research, Sonnet elsewhere"
+    description: "Deepest research and feedback quality. Recommended for high-stakes decisions."
+    estimated_cost: "$3.00–5.00"
+    brief_mode: false
+    steps:
+      pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 512,  max_searches: 0 }
+      research:  { model: claude-opus-4-7,            max_tokens: 4000, max_searches: 10 }
+      feedback:  { model: claude-opus-4-7,            max_tokens: 4000, max_searches: 10 }
+      synthesis: { model: claude-sonnet-4-6,          max_tokens: 2000, max_searches: 0 }
+      spec:      { model: claude-sonnet-4-6,          max_tokens: 4000, max_searches: 0 }
+      stories:   { model: claude-sonnet-4-6,          max_tokens: 4000, max_searches: 0 }
 
 # Phase 2: Discord connector
 discord:
