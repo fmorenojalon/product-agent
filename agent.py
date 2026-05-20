@@ -124,7 +124,7 @@ def run_skill(
         response = api_call_with_retry(lambda: client.messages.create(**kwargs))
 
         for block in response.content:
-            if getattr(block, "type", None) == "tool_use":
+            if getattr(block, "type", None) in ("tool_use", "server_tool_use"):
                 search_count += 1
 
         text = "".join(b.text for b in response.content if hasattr(b, "text"))
@@ -134,9 +134,14 @@ def run_skill(
         if response.stop_reason == "end_turn":
             break
         elif response.stop_reason == "max_tokens":
-            # Output was cut off — continue generation from where it stopped
+            # Output was cut off — continue generation from where it stopped.
+            # Strip server_tool_use + web_search_tool_result blocks before storing:
+            # each search result carries ~27k chars of encrypted_content that would
+            # push the continuation request over the 30k token/min rate limit.
+            # The model's partial text already incorporates the search findings.
             continuing = True
-            messages.append({"role": "assistant", "content": response.content})
+            text_blocks = [b for b in response.content if getattr(b, "type", "") == "text"]
+            messages.append({"role": "assistant", "content": text_blocks or response.content})
             messages.append({"role": "user", "content": "Continue exactly where you left off. No preamble."})
         elif response.stop_reason == "tool_use":
             continuing = False
