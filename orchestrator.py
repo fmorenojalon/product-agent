@@ -4,7 +4,6 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -178,19 +177,13 @@ def run_research(
         f"Key products to find feedback on: {', '.join(competitors)}"
     )
 
-    results: dict[str, str] = {}
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = {
-            executor.submit(run_skill, "product-analysis", uc1_msg, "", profile, "research"): "research",
-            executor.submit(run_skill, "product-user-feedback", uc2_msg, "", profile, "feedback"): "feedback",
-        }
-        for future in as_completed(futures):
-            key = futures[future]
-            results[key] = future.result()
-            label = "Competitive research" if key == "research" else "User feedback synthesis"
-            print(f"  ✓ {label} complete")
+    research = run_skill("product-analysis", uc1_msg, "", profile, "research")
+    print("  ✓ Competitive research complete")
 
-    return results["research"], results["feedback"]
+    feedback = run_skill("product-user-feedback", uc2_msg, "", profile, "feedback")
+    print("  ✓ User feedback synthesis complete")
+
+    return research, feedback
 
 
 def generate_proposals(document: str, research: str, feedback: str, profile: dict) -> str:
@@ -291,7 +284,7 @@ def main() -> None:
     print(f"  Persona     : {persona}\n")
 
     # Phase A — parallel research
-    print("[ Phase A ] Competitive research + user feedback running in parallel...")
+    print("[ Phase A ] Competitive research + user feedback...")
     research, feedback = run_research(document, competitors, persona, profile)
     print()
 

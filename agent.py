@@ -1,5 +1,6 @@
 import os
 import time
+import random
 import yaml
 import anthropic
 from pathlib import Path
@@ -69,16 +70,20 @@ def _strip_frontmatter(text: str) -> str:
     return text
 
 
-def api_call_with_retry(fn, max_retries: int = 3):
-    """Retry an API call on rate limit errors with exponential backoff."""
+def api_call_with_retry(fn, max_retries: int = 5):
+    """Retry an API call on rate limit errors.
+
+    Waits just past the 60-second rate limit window on each attempt.
+    Jitter prevents simultaneous retries across continuation rounds.
+    """
     for attempt in range(max_retries):
         try:
             return fn()
         except anthropic.RateLimitError:
             if attempt == max_retries - 1:
                 raise
-            wait = 60 * (2 ** attempt)
-            print(f"\n  Rate limit hit — waiting {wait}s before retry ({attempt + 1}/{max_retries})...")
+            wait = 65 + random.randint(0, 20)
+            print(f"\n  Rate limit hit — waiting {wait}s before retry ({attempt + 1}/{max_retries - 1})...")
             time.sleep(wait)
 
 
