@@ -1,4 +1,28 @@
-model: claude-sonnet-4-6
+# Model and token limits per pipeline step.
+# Swap any step to claude-sonnet-4-6 for higher quality at higher cost.
+# Estimated cost per full run:
+#   all haiku  → ~$0.15–0.25
+#   all sonnet → ~$1.50–2.50
+#   mixed      → tune to taste
+steps:
+  pre_step:                         # competitor + persona extraction
+    model: claude-haiku-4-5-20251001
+    max_tokens: 512
+  research:                         # UC-1 competitive research
+    model: claude-haiku-4-5-20251001
+    max_tokens: 4000
+  feedback:                         # UC-2 user feedback synthesis
+    model: claude-haiku-4-5-20251001
+    max_tokens: 4000
+  synthesis:                        # proposal generation
+    model: claude-haiku-4-5-20251001
+    max_tokens: 2048
+  spec:                             # UC-3 product specification
+    model: claude-haiku-4-5-20251001
+    max_tokens: 4000
+  stories:                          # UC-4 user story generation
+    model: claude-haiku-4-5-20251001
+    max_tokens: 4000
 
 # Phase 2: Discord connector
 discord:

@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 load_dotenv()
 
-from agent import client, MODEL, DRY_RUN_MODEL, DRY_RUN_MAX_TOKENS, api_call_with_retry, run_skill
+from agent import client, step_model, step_max_tokens, api_call_with_retry, run_skill
 from connectors.discord import fetch_feedback
 from connectors.notion import push_stories
 
@@ -37,12 +37,14 @@ def _truncate(text: str, max_chars: int) -> str:
     return text[:max_chars] + "\n\n[output truncated]"
 
 
-def _llm(messages: list, max_tokens: int = 2048, dry_run: bool = False) -> str:
-    """Direct Claude API call with retry and dry-run support."""
-    model = DRY_RUN_MODEL if dry_run else MODEL
-    actual_max = DRY_RUN_MAX_TOKENS if dry_run else max_tokens
+def _llm(messages: list, step: str = "", dry_run: bool = False) -> str:
+    """Direct Claude API call with retry, using per-step model config."""
     response = api_call_with_retry(
-        lambda: client.messages.create(model=model, max_tokens=actual_max, messages=messages)
+        lambda: client.messages.create(
+            model=step_model(step, dry_run),
+            max_tokens=step_max_tokens(step, dry_run),
+            messages=messages,
+        )
     )
     return response.content[0].text
 
@@ -62,7 +64,7 @@ def extract_competitors_and_persona(document: str, dry_run: bool = False) -> tup
             "Return only valid JSON, no explanation.\n\n"
             f"## Product Idea Document\n\n{document}"
         ),
-    }], dry_run=dry_run))
+    }], step="pre_step", dry_run=dry_run))
 
 
 def run_research(
@@ -84,8 +86,8 @@ def run_research(
     results: dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {
-            executor.submit(run_skill, "product-analysis", uc1_msg, "", dry_run): "research",
-            executor.submit(run_skill, "product-user-feedback", uc2_msg, "", dry_run): "feedback",
+            executor.submit(run_skill, "product-analysis", uc1_msg, "", dry_run, "research"): "research",
+            executor.submit(run_skill, "product-user-feedback", uc2_msg, "", dry_run, "feedback"): "feedback",
         }
         for future in as_completed(futures):
             key = futures[future]
@@ -115,7 +117,7 @@ def generate_proposals(document: str, research: str, feedback: str, dry_run: boo
             "- 1-2 sentences grounding it in the research\n\n"
             "Format them clearly and number them so the user can pick one."
         ),
-    }], max_tokens=2048, dry_run=dry_run)
+    }], step="synthesis", dry_run=dry_run)
 
 
 def run_spec(
@@ -136,6 +138,7 @@ def run_spec(
         "Generate a PRD based on the product idea document and research context provided.",
         extra_context=extra,
         dry_run=dry_run,
+        step="spec",
     )
 
 
@@ -145,6 +148,7 @@ def run_stories(spec: str, dry_run: bool = False) -> str:
         "product-user-story",
         f"Generate epics and user stories for the following product specification:\n\n{spec}",
         dry_run=dry_run,
+        step="stories",
     )
 
 

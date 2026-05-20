@@ -1,10 +1,11 @@
 import os
 import time
+import yaml
 import anthropic
+from pathlib import Path
 from anthropic import Anthropic
 
 client = Anthropic()
-MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 DRY_RUN_MODEL = "claude-haiku-4-5-20251001"
 DRY_RUN_MAX_TOKENS = 512
 
@@ -29,6 +30,31 @@ produce a minimal placeholder output so the pipeline can be validated end-to-end
 """
 
 
+def _load_config() -> dict:
+    path = Path(__file__).parent / "config.yaml"
+    if path.exists():
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    return {}
+
+
+CONFIG = _load_config()
+
+
+def step_model(step: str, dry_run: bool = False) -> str:
+    if dry_run:
+        return DRY_RUN_MODEL
+    cfg = CONFIG.get("steps", {}).get(step, {})
+    return cfg.get("model", "claude-sonnet-4-6")
+
+
+def step_max_tokens(step: str, dry_run: bool = False) -> int:
+    if dry_run:
+        return DRY_RUN_MAX_TOKENS
+    cfg = CONFIG.get("steps", {}).get(step, {})
+    return cfg.get("max_tokens", 4000)
+
+
 def _strip_frontmatter(text: str) -> str:
     """Remove YAML frontmatter (--- ... ---) from SKILL.md files."""
     if text.startswith("---"):
@@ -51,14 +77,20 @@ def api_call_with_retry(fn, max_retries: int = 3):
             time.sleep(wait)
 
 
-def run_skill(skill_path: str, user_message: str, extra_context: str = "", dry_run: bool = False) -> str:
+def run_skill(
+    skill_path: str,
+    user_message: str,
+    extra_context: str = "",
+    dry_run: bool = False,
+    step: str = "",
+) -> str:
     """Run a skill using its SKILL.md as system prompt with an agentic tool-use loop."""
     raw = open(f"{skill_path}/SKILL.md").read()
     suffix = _API_MODE_SUFFIX + (_DRY_RUN_SUFFIX if dry_run else "")
     system_prompt = _strip_frontmatter(raw) + suffix
 
-    model = DRY_RUN_MODEL if dry_run else MODEL
-    max_tokens = DRY_RUN_MAX_TOKENS if dry_run else 8096
+    model = step_model(step, dry_run)
+    max_tokens = step_max_tokens(step, dry_run)
 
     content = user_message if not extra_context else f"{user_message}\n\n{extra_context}"
     messages = [{"role": "user", "content": content}]
@@ -66,7 +98,6 @@ def run_skill(skill_path: str, user_message: str, extra_context: str = "", dry_r
     while True:
         kwargs = dict(model=model, max_tokens=max_tokens, system=system_prompt, messages=messages)
         if not dry_run:
-            # Web search only in full runs — it's expensive and slow
             kwargs["tools"] = [SEARCH_TOOL]
 
         response = api_call_with_retry(lambda: client.messages.create(**kwargs))
@@ -77,7 +108,6 @@ def run_skill(skill_path: str, user_message: str, extra_context: str = "", dry_r
             )
 
         if response.stop_reason == "tool_use":
-            # Anthropic's web_search is server-side; append turn and continue loop
             messages.append({"role": "assistant", "content": response.content})
         else:
             break

@@ -132,11 +132,32 @@ The richer the document, the more grounded the proposals and spec will be.
 
 ## Configuration
 
-| Key in `config.yaml` | Description |
+Each pipeline step has its own model and token limit in `config.yaml`:
+
+```yaml
+steps:
+  pre_step:   { model: claude-haiku-4-5-20251001, max_tokens: 512  }
+  research:   { model: claude-haiku-4-5-20251001, max_tokens: 4000 }
+  feedback:   { model: claude-haiku-4-5-20251001, max_tokens: 4000 }
+  synthesis:  { model: claude-haiku-4-5-20251001, max_tokens: 2048 }
+  spec:       { model: claude-haiku-4-5-20251001, max_tokens: 4000 }
+  stories:    { model: claude-haiku-4-5-20251001, max_tokens: 4000 }
+```
+
+Swap any step to `claude-sonnet-4-6` for higher quality. Rough cost guidance:
+
+| Config | Est. cost/run |
 |---|---|
-| `model` | Claude model to use (default: `claude-sonnet-4-6`) |
-| `discord.channels` | List of Discord channel IDs to pull feedback from |
-| `notion.database_id` | Notion database where user stories are created |
+| All Haiku | $0.15–0.25 |
+| Haiku + Sonnet for research & feedback | $0.40–0.60 |
+| All Sonnet | $1.50–2.50 |
+
+Other settings:
+
+| Key | Description |
+|---|---|
+| `discord.channels` | Discord channel IDs to pull feedback from (Phase 2) |
+| `notion.database_id` | Notion database for user stories (Phase 2) |
 
 Secrets (API keys) go in `.env` — never committed.
 
