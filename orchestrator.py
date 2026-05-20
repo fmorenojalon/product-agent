@@ -53,7 +53,7 @@ def _llm(messages: list, step: str = "", profile: dict | None = None) -> str:
     return response.content[0].text
 
 
-# ── Profile selection ─────────────────────────────────────────────────────────
+# ── Profile + mode selection ──────────────────────────────────────────────────
 
 def select_profile() -> dict:
     profiles = CONFIG.get("profiles", {})
@@ -72,6 +72,77 @@ def select_profile() -> dict:
             print(f"\n  → {selected['name']}\n")
             return selected
         print(f"  Please enter one of: {', '.join(sorted(profiles))}")
+
+
+def choose_mode(brief: bool) -> bool:
+    """Returns True for interactive mode. Skipped in brief/test profiles."""
+    if brief:
+        return False
+    print("Run mode:\n")
+    print("  A  Autonomous    Work with the idea document as-is. No extra questions.")
+    print("  I  Interactive   I'll ask a few focused questions before the spec.")
+    print("                   Better output, ~3 extra minutes.\n")
+    while True:
+        choice = input("Mode (A/I): ").strip().upper()
+        if choice in ("A", "I"):
+            label = "Interactive" if choice == "I" else "Autonomous"
+            print(f"\n  → {label}\n")
+            return choice == "I"
+        print("  Please enter A or I.")
+
+
+# ── Interactive interview ─────────────────────────────────────────────────────
+
+def _parse_questions(text: str) -> list[str]:
+    questions = []
+    for line in text.strip().splitlines():
+        line = line.strip()
+        if re.match(r"^\d+[\.\)]\s+", line):
+            q = re.sub(r"^\d+[\.\)]\s+", "", line).strip()
+            if q:
+                questions.append(q)
+    return questions
+
+
+def run_interactive_interview(
+    document: str, research: str, feedback: str, chosen_direction: str, profile: dict
+) -> str:
+    max_chars = 2000 if profile.get("brief_mode") else 3000
+    questions_text = _llm([{
+        "role": "user",
+        "content": (
+            "You are about to generate a product spec (PRD). Review the inputs below and "
+            "identify the 4–5 most impactful questions that are NOT yet answered by the documents. "
+            "Focus on gaps that would materially improve the spec: success metrics, business case, "
+            "MVP scope, delivery phases, target platforms or views, risks, or prioritisation.\n\n"
+            "Rules:\n"
+            "- Only ask about information genuinely missing from the idea document\n"
+            "- Be specific and actionable — not 'tell me more' but "
+            "'What is the target monthly active user goal within 6 months of launch?'\n"
+            "- Do NOT ask about anything the idea document already addresses\n"
+            "- Output numbered questions only — no preamble, no explanation\n\n"
+            f"## Product Idea Document\n\n{document}\n\n"
+            f"## Chosen Product Direction\n\n{chosen_direction}\n\n"
+            f"## Competitive Research\n\n{_truncate(research, max_chars)}\n\n"
+            f"## User Feedback\n\n{_truncate(feedback, max_chars)}"
+        ),
+    }], step="pre_step", profile=profile)
+
+    questions = _parse_questions(questions_text)
+    if not questions:
+        return ""
+
+    print("[ Interactive ] A few questions before the spec — press Enter to skip any:\n")
+    qa_pairs = []
+    for q in questions:
+        answer = input(f"  {q}\n  > ").strip()
+        print()
+        if answer:
+            qa_pairs.append(f"Q: {q}\nA: {answer}")
+
+    if not qa_pairs:
+        return ""
+    return "## Additional context from pre-spec interview\n\n" + "\n\n".join(qa_pairs)
 
 
 # ── Pipeline steps ────────────────────────────────────────────────────────────
@@ -144,7 +215,8 @@ def generate_proposals(document: str, research: str, feedback: str, profile: dic
 
 
 def run_spec(
-    document: str, chosen_direction: str, research: str, feedback: str, profile: dict
+    document: str, chosen_direction: str, research: str, feedback: str, profile: dict,
+    interview_context: str = "",
 ) -> str:
     brief = profile.get("brief_mode", False)
     max_chars = 2000 if brief else 3000
@@ -156,6 +228,8 @@ def run_spec(
         f"## Competitive research\n\n{_truncate(research, max_chars)}\n\n"
         f"## User feedback synthesis\n\n{_truncate(feedback, max_chars)}"
     )
+    if interview_context:
+        extra += f"\n\n{interview_context}"
     return run_skill(
         "product-specification",
         "Generate a PRD based on the product idea document and research context provided.",
@@ -199,8 +273,9 @@ def main() -> None:
         print("  python orchestrator.py my-idea.md")
         sys.exit(1)
 
-    # Profile selection
+    # Profile + mode selection
     profile = select_profile()
+    interactive = choose_mode(profile.get("brief_mode", False))
 
     document = input_path.read_text()
     title = input_path.stem
@@ -233,9 +308,16 @@ def main() -> None:
     ).strip()
     print()
 
+    # Optional interactive interview
+    interview_context = ""
+    if interactive:
+        interview_context = run_interactive_interview(
+            document, research, feedback, chosen, profile
+        )
+
     # Phase B — sequential
     print("[ Phase B ] Drafting product spec...")
-    spec = run_spec(document, chosen, research, feedback, profile)
+    spec = run_spec(document, chosen, research, feedback, profile, interview_context)
     print("  ✓ Spec complete\n")
 
     print("[ Phase B ] Generating user stories...")
