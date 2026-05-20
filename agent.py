@@ -132,7 +132,7 @@ def run_skill(
             # Output was cut off — continue generation from where it stopped
             continuing = True
             messages.append({"role": "assistant", "content": response.content})
-            messages.append({"role": "user", "content": "Continue."})
+            messages.append({"role": "user", "content": "Continue exactly where you left off. No preamble."})
         elif response.stop_reason == "tool_use":
             continuing = False
             messages.append({"role": "assistant", "content": response.content})
