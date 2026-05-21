@@ -56,6 +56,9 @@ PARSED_FIXTURE = [
     },
 ]
 
+# Notion API v2025 databases.create response includes data_sources
+DB_CREATE_RESPONSE = {"id": "db-123", "data_sources": [{"id": "ds-abc"}]}
+
 
 def _mock_anthropic(data: list) -> MagicMock:
     """Build a fake Anthropic client whose messages.create returns JSON of `data`."""
@@ -126,9 +129,16 @@ class TestParseStories(unittest.TestCase):
 
 class TestCreateDatabase(unittest.TestCase):
 
-    def test_creates_database_with_given_name(self):
+    def _make_client(self, db_id="new-db-xyz", ds_id="ds-abc"):
         mock_client = MagicMock()
-        mock_client.databases.create.return_value = {"id": "new-db-xyz"}
+        mock_client.databases.create.return_value = {
+            "id": db_id,
+            "data_sources": [{"id": ds_id}],
+        }
+        return mock_client
+
+    def test_creates_database_with_given_name(self):
+        mock_client = self._make_client()
         result = create_database(mock_client, "parent-page-123", "turnup — 2026-05-21 14:30")
         self.assertEqual(result, "new-db-xyz")
         mock_client.databases.create.assert_called_once()
@@ -137,27 +147,33 @@ class TestCreateDatabase(unittest.TestCase):
 
     def test_always_creates_new_database(self):
         """Every call to create_database hits the API — no caching."""
-        mock_client = MagicMock()
-        mock_client.databases.create.return_value = {"id": "db-1"}
+        mock_client = self._make_client()
         create_database(mock_client, "parent-page-123", "run 1")
-        mock_client.databases.create.return_value = {"id": "db-2"}
+        mock_client.databases.create.return_value = {"id": "db-2", "data_sources": [{"id": "ds-2"}]}
         create_database(mock_client, "parent-page-123", "run 2")
         self.assertEqual(mock_client.databases.create.call_count, 2)
 
-    def test_created_database_has_all_required_columns(self):
-        mock_client = MagicMock()
-        mock_client.databases.create.return_value = {"id": "db-xyz"}
+    def test_schema_applied_via_data_sources_update(self):
+        """Schema columns are set via data_sources.update, not databases.create."""
+        mock_client = self._make_client(ds_id="ds-abc")
         create_database(mock_client, "parent-page-123", "test db")
-        props = mock_client.databases.create.call_args[1]["properties"]
-        for col in ("Title", "Epic", "Description", "Acceptance Criteria", "Status"):
+        mock_client.data_sources.update.assert_called_once()
+        call_kwargs = mock_client.data_sources.update.call_args[1]
+        self.assertEqual(call_kwargs["data_source_id"], "ds-abc")
+
+    def test_created_database_has_all_required_columns(self):
+        """Epic, Description, Acceptance Criteria, Status appear in data_sources.update."""
+        mock_client = self._make_client()
+        create_database(mock_client, "parent-page-123", "test db")
+        props = mock_client.data_sources.update.call_args[1]["properties"]
+        for col in ("Epic", "Description", "Acceptance Criteria", "Status"):
             self.assertIn(col, props, f"Missing column: {col}")
 
     def test_no_run_column_in_schema(self):
         """Run column was removed — each database IS the run."""
-        mock_client = MagicMock()
-        mock_client.databases.create.return_value = {"id": "db-xyz"}
+        mock_client = self._make_client()
         create_database(mock_client, "parent-page-123", "test db")
-        props = mock_client.databases.create.call_args[1]["properties"]
+        props = mock_client.data_sources.update.call_args[1]["properties"]
         self.assertNotIn("Run", props)
 
 
@@ -167,7 +183,7 @@ class TestPushStories(unittest.TestCase):
 
     def _run(self, stories_md="markdown", db_name="turnup — 2026-05-21 14:30"):
         mock_notion = MagicMock()
-        mock_notion.databases.create.return_value = {"id": "db-123"}
+        mock_notion.databases.create.return_value = DB_CREATE_RESPONSE
         with patch.dict(os.environ, {"NOTION_TOKEN": "secret_t", "NOTION_PARENT_PAGE_ID": "pg-1"}), \
              patch("connectors.notion.NotionClient", return_value=mock_notion), \
              patch("connectors.notion.parse_stories", return_value=PARSED_FIXTURE):
@@ -189,7 +205,7 @@ class TestPushStories(unittest.TestCase):
     def test_database_name_passed_correctly(self):
         db_name = "turnup — 2026-05-21 14:30"
         mock_notion = MagicMock()
-        mock_notion.databases.create.return_value = {"id": "db-123"}
+        mock_notion.databases.create.return_value = DB_CREATE_RESPONSE
         with patch.dict(os.environ, {"NOTION_TOKEN": "secret_t", "NOTION_PARENT_PAGE_ID": "pg-1"}), \
              patch("connectors.notion.NotionClient", return_value=mock_notion), \
              patch("connectors.notion.parse_stories", return_value=PARSED_FIXTURE):
@@ -204,7 +220,7 @@ class TestPushStories(unittest.TestCase):
     def test_field_mapping_correct(self):
         mock_notion = self._run()
         props = mock_notion.pages.create.call_args_list[0][1]["properties"]
-        for field in ("Title", "Epic", "Description", "Acceptance Criteria", "Status"):
+        for field in ("Name", "Epic", "Description", "Acceptance Criteria", "Status"):
             self.assertIn(field, props, f"Missing field: {field}")
         self.assertEqual(props["Status"]["select"]["name"], "To Do")
 

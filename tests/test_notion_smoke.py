@@ -10,12 +10,12 @@ Cost: ~$0.001 (one Haiku call to parse a tiny fixture)
 
 What to check manually after running:
   - 2 rows appear in the Notion database
-  - All fields populated: Title, Epic, Description, Acceptance Criteria, Status, Run
-  - Run field shows today's date/time
+  - All fields populated: Name, Epic, Description, Acceptance Criteria, Status
 """
 import os
 import sys
 import unittest
+from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -48,7 +48,8 @@ class TestNotionSmoke(unittest.TestCase):
         """Writes 2 fixture stories to a new Notion database without error."""
         from connectors.notion import push_stories
 
-        push_stories(FIXTURE_MARKDOWN, "smoke-test — 2026-05-21 14:00")
+        db_name = f"smoke-test — {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        push_stories(FIXTURE_MARKDOWN, db_name)
         # If no exception was raised, the write succeeded.
         # Verify the new database and 2 rows appeared in Notion by eye.
 
@@ -58,7 +59,7 @@ class TestNotionSmoke(unittest.TestCase):
         os.environ["NOTION_TOKEN"] = "secret_badtoken000000000000000000000000000000"
         try:
             from connectors.notion import push_stories
-            push_stories(FIXTURE_MARKDOWN, "smoke-bad-token")  # must not raise
+            push_stories(FIXTURE_MARKDOWN, f"smoke-bad-token — {datetime.now().strftime('%Y-%m-%d %H:%M')}")  # must not raise
         finally:
             if original:
                 os.environ["NOTION_TOKEN"] = original

@@ -60,12 +60,22 @@ def parse_stories(markdown: str) -> list[dict]:
 
 
 def create_database(client: "NotionClient", parent_page_id: str, db_name: str) -> str:
-    """Create a new Notion database under parent_page_id and return its ID."""
-    response = client.databases.create(
+    """Create a new Notion database under parent_page_id and return its ID.
+
+    The Notion API (2025) separates databases (views) from data sources (schema).
+    databases.create no longer accepts a properties argument — the schema must be
+    applied via data_sources.update on the auto-created data source.
+    """
+    db_resp = client.databases.create(
         parent={"type": "page_id", "page_id": parent_page_id},
         title=[{"type": "text", "text": {"content": db_name}}],
+    )
+    db_id = db_resp["id"]
+    ds_id = db_resp["data_sources"][0]["id"]
+
+    client.data_sources.update(
+        data_source_id=ds_id,
         properties={
-            "Title": {"title": {}},
             "Epic": {"select": {}},
             "Description": {"rich_text": {}},
             "Acceptance Criteria": {"rich_text": {}},
@@ -80,7 +90,7 @@ def create_database(client: "NotionClient", parent_page_id: str, db_name: str) -
             },
         },
     )
-    return response["id"]
+    return db_id
 
 
 def push_stories(stories_markdown: str, db_name: str) -> None:
@@ -116,7 +126,7 @@ def push_stories(stories_markdown: str, db_name: str) -> None:
             notion.pages.create(
                 parent={"database_id": db_id},
                 properties={
-                    "Title": {
+                    "Name": {
                         "title": [{"text": {"content": _trunc(story.get("title", "Untitled"))}}]
                     },
                     "Epic": {
