@@ -20,13 +20,15 @@ python -m pytest tests/test_notion_unit.py -v
 - [ ] `test_parse_stories_malformed` — garbled markdown returns `[]` or a best-effort partial list, no exception
 
 **Database creation**
-- [ ] `test_ensure_database_creates` — when `NOTION_DATABASE_ID` is not set, `ensure_database()` calls Notion create API with the correct schema (all 6 columns, correct types)
-- [ ] `test_ensure_database_reuses` — when `NOTION_DATABASE_ID` is set in env, `ensure_database()` skips creation and returns the existing ID
+- [ ] `test_create_database_with_given_name` — `create_database()` calls Notion API with the exact name passed in
+- [ ] `test_always_creates_new_database` — calling `create_database()` twice makes two API calls (no caching)
+- [ ] `test_created_database_has_all_required_columns` — schema contains Title, Epic, Description, Acceptance Criteria, Status (5 columns)
+- [ ] `test_no_run_column_in_schema` — Run column absent; the database name carries run identity
 
 **Row creation**
 - [ ] `test_push_stories_row_count` — `push_stories()` calls Notion page-create exactly N times for N stories
-- [ ] `test_push_stories_field_mapping` — each created row has correct Title, Epic, Description, Acceptance Criteria, Status (`To Do`), and Run fields
-- [ ] `test_push_stories_run_id` — the Run field matches the `run_id` passed to `push_stories()`
+- [ ] `test_push_stories_field_mapping` — each created row has correct Title, Epic, Description, Acceptance Criteria, Status (`To Do`)
+- [ ] `test_no_run_field_in_rows` — Run field absent from row properties
 
 **Failure handling**
 - [ ] `test_push_stories_auth_failure` — if the Notion client raises `APIResponseError` (e.g. 401), `push_stories()` prints a warning and returns without raising
@@ -44,10 +46,9 @@ python -m pytest tests/test_notion_smoke.py -v
 
 Preconditions: `NOTION_TOKEN` and `NOTION_PARENT_PAGE_ID` set in `.env`.
 
-- [ ] Two rows appear in the Notion database after the test runs
-- [ ] All six fields are populated correctly in Notion (verify by eye)
-- [ ] Running the test a second time appends two more rows (expected — no deduplication)
-- [ ] After the first run, `NOTION_DATABASE_ID` is written to `.env` (or printed with instructions to add it)
+- [ ] A new database named `"smoke-test — 2026-05-21 14:00"` appears under the parent page in Notion
+- [ ] Two rows appear in that database with all 5 fields populated (verify by eye)
+- [ ] Running the test a second time creates a second database — rows never mix
 - [ ] Revoking the token and re-running prints a warning and exits 0 — does not crash
 
 ---
@@ -62,15 +63,15 @@ python orchestrator.py idea.md   # select profile 1
 
 - [ ] Pipeline completes without error
 - [ ] `output/<run>/user-stories.md` is written locally
-- [ ] At least one row appears in Notion (brief mode output is minimal but non-empty)
-- [ ] The `Run` field in Notion rows matches the output folder timestamp
+- [ ] A new database named `"idea — {timestamp}"` appears in Notion under the parent page
+- [ ] At least one row appears in that database (brief mode output is minimal but non-empty)
 - [ ] If `NOTION_TOKEN` is missing from `.env`, pipeline prints a clear warning and continues — does not crash
 
 ---
 
 ## Gate 4 — Pre-merge code checklist
 
-- [ ] `.env.example` updated with `NOTION_TOKEN`, `NOTION_PARENT_PAGE_ID`, `NOTION_DATABASE_ID`
+- [ ] `.env.example` updated with `NOTION_TOKEN` and `NOTION_PARENT_PAGE_ID` (no `NOTION_DATABASE_ID` — not needed)
 - [ ] `requirements.txt` updated with `notion-client`
 - [ ] No credentials or IDs hardcoded anywhere in source
 - [ ] `connectors/notion.py` has no dead mock code remaining
@@ -84,6 +85,6 @@ python orchestrator.py idea.md   # select profile 1
 A single `python orchestrator.py idea.md` run (profile 3, balanced) results in:
 
 1. All four local markdown files written to `output/<run>/`
-2. User stories appearing in the Notion database with correct fields
-3. Run timestamp in Notion matches the output folder name
+2. A new Notion database named `"{title} — {timestamp}"` created under the parent page, with user stories as rows
+3. Each row has Title, Epic, Description, Acceptance Criteria, Status populated
 4. If Notion is unreachable (network, bad token), the run still completes and local files are written

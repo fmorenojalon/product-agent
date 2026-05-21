@@ -5,9 +5,9 @@
 Phase 2 replaces the mock Notion connector with a real integration. Discord and Reddit connectors are explicitly out of scope — the `product-user-feedback` skill already handles community feedback via web search (`site:reddit.com` queries), and adding API connectors for those sources would add credential overhead with no additional signal.
 
 ### In scope
-- Notion API: write UC-4 user stories to a new Notion database
+- Notion API: write UC-4 user stories to a new Notion database on every run
 - Story parsing: extract structured story objects from the UC-4 markdown output via a Haiku LLM call
-- Schema creation: connector creates the database on first run under a user-specified parent page
+- Schema creation: connector creates a fresh database per run, named `"{title} — YYYY-MM-DD HH:MM"`, under `NOTION_PARENT_PAGE_ID`
 - Error handling: Notion failures warn and continue — local markdown files are always written
 - Credentials: `NOTION_TOKEN` and `NOTION_PARENT_PAGE_ID` via `.env`
 
@@ -15,7 +15,7 @@ Phase 2 replaces the mock Notion connector with a real integration. Discord and 
 - Discord connector (dropped)
 - Reddit API connector (dropped)
 - Pushing UC-3 spec to Notion (user stories only)
-- Updating or deduplicating existing Notion rows (each run appends new rows)
+- Reusing or deduplicating databases across runs (each run always creates a new database)
 - Two-way sync or approval workflows
 
 ---
@@ -26,7 +26,7 @@ Phase 2 replaces the mock Notion connector with a real integration. Discord and 
 |---|---|---|
 | Discord/Reddit connector | Dropped | `product-user-feedback` already runs `site:reddit.com` searches via Anthropic hosted web search; API adds a new credential with no additional coverage |
 | Notion output format | Database rows | Queryable, filterable, supports sprint tracking; more useful than a markdown page for actionable work |
-| Notion schema | New database (connector creates it) | No existing task database; clean schema from the start |
+| Notion schema | One new database per run | Each run creates its own database named by idea + timestamp; no shared state, no filtering needed to separate ideas |
 | What goes to Notion | User stories only (UC-4) | Spec stays as a local markdown file; stories are the actionable artifact |
 | Connector failure mode | Warn and continue | Local files are the primary deliverable; Notion is a convenience layer |
 | Story extraction method | LLM-based (Haiku) | UC-4 markdown format can vary across runs; deterministic regex parsing is brittle; one Haiku call is cheap (~$0.001) and robust |
@@ -35,7 +35,7 @@ Phase 2 replaces the mock Notion connector with a real integration. Discord and 
 
 ## Notion Database Schema
 
-The connector creates this database under `NOTION_PARENT_PAGE_ID` on first run:
+Each run creates a new database named `"{title} — YYYY-MM-DD HH:MM"` under `NOTION_PARENT_PAGE_ID`. The database name itself carries the run identity, so no `Run` column is needed.
 
 | Column | Notion Type | Notes |
 |---|---|---|
@@ -44,7 +44,6 @@ The connector creates this database under `NOTION_PARENT_PAGE_ID` on first run:
 | Description | rich_text | Full user story text |
 | Acceptance Criteria | rich_text | Acceptance criteria list |
 | Status | select | Default: `To Do` |
-| Run | rich_text | Run timestamp (e.g. `2026-05-21_14-30`) for traceability |
 
 ---
 
@@ -54,7 +53,7 @@ Add to `.env`:
 
 ```
 NOTION_TOKEN=secret_...          # Integration token from notion.so/my-integrations
-NOTION_PARENT_PAGE_ID=...        # ID of the Notion page that will contain the database
+NOTION_PARENT_PAGE_ID=...        # ID of the Notion page that will contain all run databases
 ```
 
 Setup steps for the user:
@@ -72,9 +71,9 @@ Replace the mock `push_stories()` with three functions:
 
 | Function | Responsibility |
 |---|---|
-| `parse_stories(markdown, profile) -> list[dict]` | Haiku call — extracts structured story dicts from UC-4 markdown |
-| `ensure_database(client, parent_page_id) -> str` | Creates the database with the schema above if it doesn't exist; returns database ID. Database ID is cached in `.env` after first creation (`NOTION_DATABASE_ID`) |
-| `push_stories(stories_markdown, run_id) -> None` | Orchestrates parse → ensure_database → create one row per story |
+| `parse_stories(markdown) -> list[dict]` | Haiku call — extracts structured story dicts from UC-4 markdown |
+| `create_database(client, parent_page_id, db_name) -> str` | Always creates a new database with the given name; returns its ID |
+| `push_stories(stories_markdown, db_name) -> None` | Orchestrates parse → create_database → create one row per story |
 
 ### Dependencies
 
@@ -85,5 +84,5 @@ notion-client
 
 ### Config changes
 
-- `.env.example`: add `NOTION_TOKEN`, `NOTION_PARENT_PAGE_ID`, `NOTION_DATABASE_ID` (auto-populated after first run)
+- `.env.example`: add `NOTION_TOKEN`, `NOTION_PARENT_PAGE_ID`
 - `config.yaml`: no changes needed — Notion settings live in `.env` only
