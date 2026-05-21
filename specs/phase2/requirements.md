@@ -6,7 +6,7 @@ Phase 2 replaces the mock Notion connector with a real integration. Discord and 
 
 ### In scope
 - Notion API: write UC-4 user stories to a new Notion database on every run
-- Story parsing: extract structured story objects from the UC-4 markdown output via a Haiku LLM call
+- Story parsing: extract structured story objects from the UC-4 markdown output via a deterministic markdown parser
 - Schema creation: connector creates a fresh database per run, named `"{title} — YYYY-MM-DD HH:MM"`, under `NOTION_PARENT_PAGE_ID`
 - Error handling: Notion failures warn and continue — local markdown files are always written
 - Credentials: `NOTION_TOKEN` and `NOTION_PARENT_PAGE_ID` via `.env`
@@ -29,7 +29,7 @@ Phase 2 replaces the mock Notion connector with a real integration. Discord and 
 | Notion schema | One new database per run | Each run creates its own database named by idea + timestamp; no shared state, no filtering needed to separate ideas |
 | What goes to Notion | User stories only (UC-4) | Spec stays as a local markdown file; stories are the actionable artifact |
 | Connector failure mode | Warn and continue | Local files are the primary deliverable; Notion is a convenience layer |
-| Story extraction method | LLM-based (Haiku) | UC-4 markdown format can vary across runs; deterministic regex parsing is brittle; one Haiku call is cheap (~$0.001) and robust |
+| Story extraction method | Deterministic parser | UC-4 output uses consistent `#### Story N.M: Title` headers under `## Epic N:` sections; regex parsing is reliable and avoids an extra LLM call (~$0.001 saved per run, no risk of content being summarised) |
 
 ---
 
@@ -71,7 +71,7 @@ Replace the mock `push_stories()` with three functions:
 
 | Function | Responsibility |
 |---|---|
-| `parse_stories(markdown) -> list[dict]` | Haiku call — extracts structured story dicts from UC-4 markdown |
+| `parse_stories(markdown) -> list[dict]` | Deterministic parser — splits on `#### Story N.M:` headers, tracks current epic from `## Epic N:` headers, extracts description (pre-AC content) and acceptance criteria verbatim |
 | `create_database(client, parent_page_id, db_name) -> str` | Always creates a new database with the given name; returns its ID |
 | `push_stories(stories_markdown, db_name) -> None` | Orchestrates parse → create_database → create one row per story |
 

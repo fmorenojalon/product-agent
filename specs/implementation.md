@@ -32,6 +32,8 @@ High-level phases. Each phase will be broken into detailed tasks separately.
 
 - **Output:** All artefacts saved as markdown files in `output/<date>_<slug>/`.
 
+- **Story scope prompt:** After mode selection, the user is asked `Scope (F/1)` — `F` generates all epics and stories (production run), `1` limits UC-4 to the single most important epic (useful for faster/cheaper test runs).
+
 - **CLI entry point:** `python orchestrator.py "idea"` runs the full pipeline.
 
 **Files introduced in Phase 1:**

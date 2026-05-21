@@ -14,10 +14,15 @@ All tests use mocked Notion client and pre-written fixture data. Run with:
 python -m pytest tests/test_notion_unit.py -v
 ```
 
-**Story parsing**
-- [ ] `test_parse_stories_happy_path` — `parse_stories()` returns correct number of stories with Title, Epic, Description, Acceptance Criteria populated from a fixture markdown
-- [ ] `test_parse_stories_empty_input` — empty string returns `[]`, no exception
-- [ ] `test_parse_stories_malformed` — garbled markdown returns `[]` or a best-effort partial list, no exception
+**Story parsing** (deterministic — no LLM)
+- [ ] `test_happy_path_story_count` — `parse_stories()` returns correct number of stories from a UC-4 format fixture
+- [ ] `test_title_extracted` — story title matches the `#### Story N.M: Title` header verbatim
+- [ ] `test_epic_assigned_correctly` — epic name is taken from the parent `## Epic N:` header
+- [ ] `test_description_is_verbatim_not_summary` — description contains the original Background text, not a paraphrase
+- [ ] `test_acceptance_criteria_verbatim` — AC section is extracted verbatim
+- [ ] `test_acceptance_criteria_excludes_linked_stories` — Linked Stories section does not appear in AC
+- [ ] `test_empty_input_returns_empty_list` — empty string returns `[]`, no exception
+- [ ] `test_markdown_without_story_headers_returns_empty` — markdown with no `#### Story` headers returns `[]`
 
 **Database creation**
 - [ ] `test_create_database_with_given_name` — `create_database()` calls Notion API with the exact name passed in
@@ -38,7 +43,7 @@ python -m pytest tests/test_notion_unit.py -v
 
 ## Gate 2 — Real API smoke test (minimal cost, real Notion)
 
-Run against your real Notion workspace using a small hardcoded fixture (2 stories). Does not invoke the LLM or the full pipeline.
+Run against your real Notion workspace using a small fixture (2 stories in UC-4 header format). Does not invoke any LLM or the full pipeline.
 
 ```bash
 python -m pytest tests/test_notion_smoke.py -v
@@ -58,13 +63,14 @@ Preconditions: `NOTION_TOKEN` and `NOTION_PARENT_PAGE_ID` set in `.env`.
 Run the full pipeline in test mode to verify the Notion connector is correctly wired into the orchestrator.
 
 ```bash
-python orchestrator.py idea.md   # select profile 1
+python orchestrator.py idea.md   # select profile 1, scope = 1 (one epic)
 ```
 
 - [ ] Pipeline completes without error
 - [ ] `output/<run>/user-stories.md` is written locally
 - [ ] A new database named `"idea — {timestamp}"` appears in Notion under the parent page
-- [ ] At least one row appears in that database (brief mode output is minimal but non-empty)
+- [ ] Rows in Notion contain verbatim content from `user-stories.md` (not paraphrased summaries)
+- [ ] Selecting scope `1` produces stories for one epic only; selecting `F` produces all epics
 - [ ] If `NOTION_TOKEN` is missing from `.env`, pipeline prints a clear warning and continues — does not crash
 
 ---
