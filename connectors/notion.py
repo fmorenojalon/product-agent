@@ -2,10 +2,6 @@
 
 import os
 import re
-import json
-
-from anthropic import Anthropic
-from agent import api_call_with_retry
 
 try:
     from notion_client import Client as NotionClient
@@ -14,49 +10,58 @@ except ImportError:
     _NOTION_AVAILABLE = False
     NotionClient = None  # type: ignore
 
-_PARSE_MODEL = "claude-haiku-4-5-20251001"
 
-
-def _trunc(text: str, limit: int = 2000) -> str:
-    return text[:limit] if len(text) > limit else text
+def _rich_text(text: str, chunk: int = 2000) -> list[dict]:
+    """Split text into Notion rich_text blocks (2 000-char API limit per element)."""
+    if not text:
+        return [{"text": {"content": ""}}]
+    return [{"text": {"content": text[i: i + chunk]}} for i in range(0, len(text), chunk)]
 
 
 def parse_stories(markdown: str) -> list[dict]:
-    """Extract structured story objects from UC-4 markdown using Haiku.
+    """Extract stories from UC-4 markdown deterministically.
 
-    Returns a list of dicts with keys: title, epic, description, acceptance_criteria.
-    Returns [] on empty input or if the LLM response cannot be parsed.
+    Looks for '#### Story N.M: Title' headers nested under '## Epic N: Name' sections.
+    Returns a list of dicts: title, epic, description, acceptance_criteria.
+    Returns [] on empty input or if no story headers are found.
     """
     if not markdown.strip():
         return []
 
-    client = Anthropic()
-    # Keep title/epic/AC only — omit description to stay well within the output
-    # token budget regardless of how many stories the spec produced.
-    prompt = (
-        "Extract all user stories from the markdown below. "
-        "Return a JSON array. Each object must have exactly these keys: "
-        '"title" (story name, short), '
-        '"epic" (section or epic it belongs to), '
-        '"description" (one sentence summary of the story), '
-        '"acceptance_criteria" (acceptance criteria as a single string, empty string if none). '
-        "Return ONLY valid JSON — no markdown fences, no explanation.\n\n"
-        f"{markdown}"
-    )
-    try:
-        response = api_call_with_retry(
-            lambda: client.messages.create(
-                model=_PARSE_MODEL,
-                max_tokens=8000,
-                messages=[{"role": "user", "content": prompt}],
-            )
-        )
-        text = response.content[0].text.strip()
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
-        return json.loads(text)
-    except Exception as e:
-        print(f"  [ Notion ] Warning: story parsing failed — {e}")
-        return []
+    lines = markdown.splitlines()
+    current_epic = "General"
+    story_spans: list[tuple[int, str, str]] = []  # (line_index, epic, title)
+
+    for i, line in enumerate(lines):
+        if re.match(r"^## (?!#)", line):
+            current_epic = re.sub(r"^##\s+(?:Epic\s+\d+:\s*)?", "", line).strip()
+        story_m = re.match(r"^####\s+(Story\s+[\d.]+:.+)", line)
+        if story_m:
+            story_spans.append((i, current_epic, story_m.group(1).strip()))
+
+    stories = []
+    for idx, (start, epic, title) in enumerate(story_spans):
+        end = story_spans[idx + 1][0] if idx + 1 < len(story_spans) else len(lines)
+        body = "\n".join(lines[start + 1: end]).strip()
+
+        ac_parts = re.split(r"\*\*Acceptance Criteria\*\*", body, maxsplit=1)
+        if len(ac_parts) == 2:
+            description = ac_parts[0].strip()
+            ac_remainder = ac_parts[1]
+            linked_split = re.split(r"\*\*Linked Stories", ac_remainder, maxsplit=1)
+            acceptance_criteria = linked_split[0].strip()
+        else:
+            description = body
+            acceptance_criteria = ""
+
+        stories.append({
+            "title": title,
+            "epic": epic,
+            "description": description,
+            "acceptance_criteria": acceptance_criteria,
+        })
+
+    return stories
 
 
 def create_database(client: "NotionClient", parent_page_id: str, db_name: str) -> str:
@@ -127,16 +132,16 @@ def push_stories(stories_markdown: str, db_name: str) -> None:
                 parent={"database_id": db_id},
                 properties={
                     "Name": {
-                        "title": [{"text": {"content": _trunc(story.get("title", "Untitled"))}}]
+                        "title": _rich_text(story.get("title", "Untitled"), chunk=2000)
                     },
                     "Epic": {
                         "select": {"name": story.get("epic", "General") or "General"}
                     },
                     "Description": {
-                        "rich_text": [{"text": {"content": _trunc(story.get("description", ""))}}]
+                        "rich_text": _rich_text(story.get("description", ""))
                     },
                     "Acceptance Criteria": {
-                        "rich_text": [{"text": {"content": _trunc(story.get("acceptance_criteria", ""))}}]
+                        "rich_text": _rich_text(story.get("acceptance_criteria", ""))
                     },
                     "Status": {"select": {"name": "To Do"}},
                 },

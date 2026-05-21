@@ -98,6 +98,20 @@ def choose_mode(brief: bool) -> bool:
         print("  Please enter A or I.")
 
 
+def choose_story_scope() -> bool:
+    """Returns True for full story generation, False to limit to 1 epic."""
+    print("Story scope:\n")
+    print("  F  Full      All epics and user stories  (production run).")
+    print("  1  One epic  Most important epic only     (faster, useful for testing).\n")
+    while True:
+        choice = input("Scope (F/1): ").strip().upper()
+        if choice in ("F", "1"):
+            label = "Full" if choice == "F" else "One epic only"
+            print(f"\n  → {label}\n")
+            return choice == "F"
+        print("  Please enter F or 1.")
+
+
 # ── Interactive interview ─────────────────────────────────────────────────────
 
 def _parse_questions(text: str) -> list[str]:
@@ -235,10 +249,15 @@ def run_spec(
     )
 
 
-def run_stories(spec: str, profile: dict) -> str:
+def run_stories(spec: str, profile: dict, full_scope: bool = True) -> str:
+    scope_note = (
+        "" if full_scope else
+        "\n\nIMPORTANT: Generate stories for ONE epic only — the single most critical epic "
+        "for an MVP. Do not generate stories for any other epic."
+    )
     return run_skill(
         "product-user-story",
-        f"Generate epics and user stories for the following product specification:\n\n{spec}",
+        f"Generate epics and user stories for the following product specification:\n\n{spec}{scope_note}",
         profile=profile,
         step="stories",
     )
@@ -272,6 +291,7 @@ def main() -> None:
     # Profile + mode selection
     profile = select_profile()
     interactive = choose_mode(profile.get("brief_mode", False))
+    full_scope = choose_story_scope()
 
     document = input_path.read_text()
     title = input_path.stem
@@ -341,7 +361,7 @@ def main() -> None:
     print("  ✓ Spec complete\n")
 
     print("[ Phase B ] Generating user stories...")
-    stories = run_stories(spec, profile)
+    stories = run_stories(spec, profile, full_scope)
     print("  ✓ User stories complete\n")
 
     push_stories(stories, db_name)

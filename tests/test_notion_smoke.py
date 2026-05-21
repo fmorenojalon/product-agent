@@ -24,17 +24,43 @@ load_dotenv()
 FIXTURE_MARKDOWN = """
 ## Epic 1: Core Loop
 
-**Story 1.1: Post in community**
-As a member, I can post text and images in a community feed.
-Acceptance Criteria:
-- Post appears immediately in the feed
-- Other members can see it within 5 seconds
+### User Stories
 
-**Story 1.2: Reply to a post**
-As a member, I can reply to any post in a community.
-Acceptance Criteria:
-- Reply is threaded under the original post
-- Author of the original post is notified
+#### Story 1.1: Post in community
+
+| User Story | Files and Documentation |
+|------------|------------------------|
+| As a member, I can post text and images in a community feed. | Designs: TBD |
+
+**Background**
+
+Members need to share content to keep the community active.
+
+**Acceptance Criteria**
+
+- Post appears immediately in the feed.
+- Other members can see it within 5 seconds.
+
+**Linked Stories / Dependencies**
+
+- Story 1.2
+
+---
+
+#### Story 1.2: Reply to a post
+
+| User Story | Files and Documentation |
+|------------|------------------------|
+| As a member, I can reply to any post in a community. | Designs: TBD |
+
+**Background**
+
+Replies drive conversation and engagement within communities.
+
+**Acceptance Criteria**
+
+- Reply is threaded under the original post.
+- Author of the original post is notified.
 """
 
 
