@@ -40,7 +40,7 @@ def parse_stories(markdown: str) -> list[dict]:
         epic_m = re.match(r"^## (?:EPIC|Epic\s+\d+):\s*(.+)", line)
         if epic_m:
             current_epic = epic_m.group(1).strip()
-        story_m = re.match(r"^#{3,4}\s+(Story\s+[\d]+(?:\.\d+)?:.+)", line)
+        story_m = re.match(r"^#{2,4}\s+(Story\s+[\d]+(?:\.\d+)?:.+)", line)
         if story_m:
             story_spans.append((i, current_epic, story_m.group(1).strip()))
 

@@ -98,11 +98,35 @@ Users need to create accounts to access communities.
 - Story 1.2
 """
 
+# Fixture C: 2-hash story headers (## Story N:) with #### AC heading
+FIXTURE_MARKDOWN_2HASH = """
+## Epic 1: Community Discovery & Onboarding
+
+## Story 1: Browse Communities
+
+| User Story | Files and Documentation |
+|------------|------------------------|
+| As a user, I can see communities near me. | Designs: TBD |
+
+#### Background
+
+Users need to discover local communities.
+
+#### Acceptance Criteria
+
+## Map View
+- Given location is granted, When the user opens Discover, Then communities appear on a map.
+
+## List View
+- Given location is granted, When the user switches to list, Then communities appear sorted by distance.
+"""
+
 # Notion API v2025 databases.create response includes data_sources
 DB_CREATE_RESPONSE = {"id": "db-123", "data_sources": [{"id": "ds-abc"}]}
 
 PARSED_FIXTURE = parse_stories(FIXTURE_MARKDOWN)
 PARSED_FIXTURE_OLD = parse_stories(FIXTURE_MARKDOWN_OLD_FORMAT)
+PARSED_FIXTURE_2HASH = parse_stories(FIXTURE_MARKDOWN_2HASH)
 
 
 # ── parse_stories ─────────────────────────────────────────────────────────────
@@ -161,6 +185,21 @@ class TestParseStories(unittest.TestCase):
         ac = PARSED_FIXTURE_OLD[0]["acceptance_criteria"]
         self.assertIn("Email must be validated", ac)
         self.assertNotIn("Linked Stories", ac)
+
+    # ── 2-hash format (## Story N: headers, #### AC heading) ─────────────────
+
+    def test_2hash_format_story_count(self):
+        self.assertEqual(len(PARSED_FIXTURE_2HASH), 1)
+
+    def test_2hash_format_title_extracted(self):
+        self.assertEqual(PARSED_FIXTURE_2HASH[0]["title"], "Story 1: Browse Communities")
+
+    def test_2hash_format_epic_assigned(self):
+        self.assertEqual(PARSED_FIXTURE_2HASH[0]["epic"], "Community Discovery & Onboarding")
+
+    def test_2hash_format_acceptance_criteria_extracted(self):
+        ac = PARSED_FIXTURE_2HASH[0]["acceptance_criteria"]
+        self.assertIn("communities appear on a map", ac)
 
 
 # ── create_database ───────────────────────────────────────────────────────────
