@@ -8,10 +8,76 @@ from connectors.notion import parse_stories, create_database, push_stories
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
+# Fixture A: new UC-4 format (### story headers, #### AC heading)
 FIXTURE_MARKDOWN = """
-## Epic 1: User Onboarding
+## EPIC: User Onboarding
 
-### User Stories
+### Story 1: Sign up
+
+| User Story | Files and Documentation |
+|------------|------------------------|
+| As a new user, I can create an account with my email. | Designs: TBD |
+
+#### Background
+
+Users need to create accounts to access communities.
+
+#### Acceptance Criteria
+
+## Email Validation
+- Email must be validated on submit.
+- Confirmation email is sent on success.
+
+#### Linked Stories / Dependencies
+
+- Story 2
+
+---
+
+### Story 2: Complete profile
+
+| User Story | Files and Documentation |
+|------------|------------------------|
+| As a user, I can add my interests after signing up. | Designs: TBD |
+
+#### Background
+
+Capturing interests enables community recommendations.
+
+#### Acceptance Criteria
+
+## Interest Selection
+- At least one interest is required before saving.
+- Interests are persisted to the user profile.
+
+#### Linked Stories / Dependencies
+
+- Story 1
+
+---
+
+## EPIC: Community Discovery
+
+### Story 3: Browse communities
+
+| User Story | Files and Documentation |
+|------------|------------------------|
+| As a user, I can browse local communities by category. | Designs: TBD |
+
+#### Background
+
+Users need to find communities relevant to their location and interests.
+
+#### Acceptance Criteria
+
+## Category List
+- Categories are listed on the discover screen.
+- Tapping a category shows matching communities.
+"""
+
+# Fixture B: old UC-4 format (#### story headers, **AC** bold marker)
+FIXTURE_MARKDOWN_OLD_FORMAT = """
+## Epic 1: User Onboarding
 
 #### Story 1.1: Sign up
 
@@ -25,60 +91,18 @@ Users need to create accounts to access communities.
 
 **Acceptance Criteria**
 
-- Given a user enters a valid email, When they click Sign Up, Then an account is created.
 - Email must be validated on submit.
 
 **Linked Stories / Dependencies**
 
 - Story 1.2
-
----
-
-#### Story 1.2: Complete profile
-
-| User Story | Files and Documentation |
-|------------|------------------------|
-| As a user, I can add my interests after signing up. | Designs: TBD |
-
-**Background**
-
-Capturing interests enables community recommendations.
-
-**Acceptance Criteria**
-
-- At least one interest is required before saving.
-- Interests are persisted to the user profile.
-
-**Linked Stories / Dependencies**
-
-- Story 1.1
-
----
-
-## Epic 2: Community Discovery
-
-### User Stories
-
-#### Story 2.1: Browse communities
-
-| User Story | Files and Documentation |
-|------------|------------------------|
-| As a user, I can browse local communities by category. | Designs: TBD |
-
-**Background**
-
-Users need to find communities relevant to their location and interests.
-
-**Acceptance Criteria**
-
-- Categories are listed on the discover screen.
-- Tapping a category shows matching communities.
 """
 
 # Notion API v2025 databases.create response includes data_sources
 DB_CREATE_RESPONSE = {"id": "db-123", "data_sources": [{"id": "ds-abc"}]}
 
 PARSED_FIXTURE = parse_stories(FIXTURE_MARKDOWN)
+PARSED_FIXTURE_OLD = parse_stories(FIXTURE_MARKDOWN_OLD_FORMAT)
 
 
 # ── parse_stories ─────────────────────────────────────────────────────────────
@@ -89,7 +113,7 @@ class TestParseStories(unittest.TestCase):
         self.assertEqual(len(PARSED_FIXTURE), 3)
 
     def test_title_extracted(self):
-        self.assertEqual(PARSED_FIXTURE[0]["title"], "Story 1.1: Sign up")
+        self.assertEqual(PARSED_FIXTURE[0]["title"], "Story 1: Sign up")
 
     def test_epic_assigned_correctly(self):
         self.assertEqual(PARSED_FIXTURE[0]["epic"], "User Onboarding")
@@ -121,6 +145,22 @@ class TestParseStories(unittest.TestCase):
 
     def test_markdown_without_story_headers_returns_empty(self):
         self.assertEqual(parse_stories("# Some doc\n\nNo stories here."), [])
+
+    # ── Old format (#### story headers, **AC** bold) ──────────────────────────
+
+    def test_old_format_story_count(self):
+        self.assertEqual(len(PARSED_FIXTURE_OLD), 1)
+
+    def test_old_format_title_extracted(self):
+        self.assertEqual(PARSED_FIXTURE_OLD[0]["title"], "Story 1.1: Sign up")
+
+    def test_old_format_epic_assigned(self):
+        self.assertEqual(PARSED_FIXTURE_OLD[0]["epic"], "User Onboarding")
+
+    def test_old_format_acceptance_criteria_extracted(self):
+        ac = PARSED_FIXTURE_OLD[0]["acceptance_criteria"]
+        self.assertIn("Email must be validated", ac)
+        self.assertNotIn("Linked Stories", ac)
 
 
 # ── create_database ───────────────────────────────────────────────────────────

@@ -21,7 +21,11 @@ def _rich_text(text: str, chunk: int = 2000) -> list[dict]:
 def parse_stories(markdown: str) -> list[dict]:
     """Extract stories from UC-4 markdown deterministically.
 
-    Looks for '#### Story N.M: Title' headers nested under '## Epic N: Name' sections.
+    Handles two output formats produced by the UC-4 skill:
+    - '### Story N: Title'  (3 hashes) with '#### Acceptance Criteria' heading
+    - '#### Story N.M: Title' (4 hashes) with '**Acceptance Criteria**' bold marker
+
+    Epics are detected from '## EPIC: Name' or '## Epic N: Name' headers.
     Returns a list of dicts: title, epic, description, acceptance_criteria.
     Returns [] on empty input or if no story headers are found.
     """
@@ -30,26 +34,37 @@ def parse_stories(markdown: str) -> list[dict]:
 
     lines = markdown.splitlines()
     current_epic = "General"
-    story_spans: list[tuple[int, str, str]] = []  # (line_index, epic, title)
+    story_spans: list[tuple[int, str, str]] = []
 
     for i, line in enumerate(lines):
-        if re.match(r"^## (?!#)", line):
-            current_epic = re.sub(r"^##\s+(?:Epic\s+\d+:\s*)?", "", line).strip()
-        story_m = re.match(r"^####\s+(Story\s+[\d.]+:.+)", line)
+        epic_m = re.match(r"^## (?:EPIC|Epic\s+\d+):\s*(.+)", line)
+        if epic_m:
+            current_epic = epic_m.group(1).strip()
+        story_m = re.match(r"^#{3,4}\s+(Story\s+[\d]+(?:\.\d+)?:.+)", line)
         if story_m:
             story_spans.append((i, current_epic, story_m.group(1).strip()))
 
     stories = []
     for idx, (start, epic, title) in enumerate(story_spans):
         end = story_spans[idx + 1][0] if idx + 1 < len(story_spans) else len(lines)
-        body = "\n".join(lines[start + 1: end]).strip()
+        body = "\n".join(lines[start + 1:end]).strip()
 
-        ac_parts = re.split(r"\*\*Acceptance Criteria\*\*", body, maxsplit=1)
-        if len(ac_parts) == 2:
-            description = ac_parts[0].strip()
-            ac_remainder = ac_parts[1]
-            linked_split = re.split(r"\*\*Linked Stories", ac_remainder, maxsplit=1)
-            acceptance_criteria = linked_split[0].strip()
+        # AC header: either "#### Acceptance Criteria" heading or "**Acceptance Criteria**" bold
+        ac_m = re.search(
+            r"(?m)^#{3,4}\s+Acceptance Criteria$|\*\*Acceptance Criteria\*\*",
+            body,
+        )
+        if ac_m:
+            description = body[:ac_m.start()].strip()
+            ac_remainder = body[ac_m.end():]
+            # Stop at the next #### section heading or **Linked/Tracking bold marker
+            stop_m = re.search(
+                r"\n#{3,4}\s+\w|\n\*\*(?:Linked Stories|Tracking)",
+                ac_remainder,
+            )
+            acceptance_criteria = (
+                ac_remainder[:stop_m.start()] if stop_m else ac_remainder
+            ).strip()
         else:
             description = body
             acceptance_criteria = ""
