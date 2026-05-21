@@ -249,6 +249,16 @@ def run_spec(
     )
 
 
+_STORIES_FORMAT = """
+
+OUTPUT FORMAT — follow exactly, no variation:
+- Epics: `## Epic N: Title`
+- Stories: `### Story N: Title`
+- Story sub-sections (Background, Scope, Notes, Out of Scope, Views, Designs, \
+Acceptance Criteria, Tracking / Metrics, Linked Stories / Dependencies): `#### Section Name`
+"""
+
+
 def run_stories(spec: str, profile: dict, full_scope: bool = True) -> str:
     scope_note = (
         "" if full_scope else
@@ -257,7 +267,8 @@ def run_stories(spec: str, profile: dict, full_scope: bool = True) -> str:
     )
     return run_skill(
         "product-user-story",
-        f"Generate epics and user stories for the following product specification:\n\n{spec}{scope_note}",
+        f"Generate epics and user stories for the following product specification:"
+        f"\n\n{spec}{scope_note}{_STORIES_FORMAT}",
         profile=profile,
         step="stories",
     )
