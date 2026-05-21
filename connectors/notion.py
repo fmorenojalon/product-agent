@@ -1,11 +1,10 @@
-"""Notion connector — writes UC-4 user stories to a Notion database."""
+"""Notion connector — writes UC-4 user stories to a new per-run Notion database."""
 
 import os
 import re
 import json
 
 from anthropic import Anthropic
-from dotenv import set_key
 
 try:
     from notion_client import Client as NotionClient
@@ -15,7 +14,6 @@ except ImportError:
     NotionClient = None  # type: ignore
 
 _PARSE_MODEL = "claude-haiku-4-5-20251001"
-_DB_TITLE = "Product Agent — User Stories"
 
 
 def _trunc(text: str, limit: int = 2000) -> str:
@@ -57,19 +55,11 @@ def parse_stories(markdown: str) -> list[dict]:
         return []
 
 
-def ensure_database(client: "NotionClient", parent_page_id: str) -> str:
-    """Return the Notion database ID to write stories to.
-
-    Reuses NOTION_DATABASE_ID from .env if set; otherwise creates a new database
-    under parent_page_id and persists the new ID back to .env.
-    """
-    db_id = os.getenv("NOTION_DATABASE_ID", "").strip()
-    if db_id:
-        return db_id
-
+def create_database(client: "NotionClient", parent_page_id: str, db_name: str) -> str:
+    """Create a new Notion database under parent_page_id and return its ID."""
     response = client.databases.create(
         parent={"type": "page_id", "page_id": parent_page_id},
-        title=[{"type": "text", "text": {"content": _DB_TITLE}}],
+        title=[{"type": "text", "text": {"content": db_name}}],
         properties={
             "Title": {"title": {}},
             "Epic": {"select": {}},
@@ -84,23 +74,15 @@ def ensure_database(client: "NotionClient", parent_page_id: str) -> str:
                     ]
                 }
             },
-            "Run": {"rich_text": {}},
         },
     )
-
-    new_id = response["id"]
-    try:
-        set_key(".env", "NOTION_DATABASE_ID", new_id)
-        print(f"  [ Notion ] Database created — ID saved to .env ({new_id})")
-    except Exception:
-        print(f"  [ Notion ] Database created. Add to .env: NOTION_DATABASE_ID={new_id}")
-
-    return new_id
+    return response["id"]
 
 
-def push_stories(stories_markdown: str, run_id: str) -> None:
+def push_stories(stories_markdown: str, db_name: str) -> None:
     """Parse UC-4 output and write one Notion database row per story.
 
+    Creates a new database named db_name under NOTION_PARENT_PAGE_ID on every call.
     Silently skips if credentials are not configured.
     Warns and continues if the Notion write fails for any reason.
     """
@@ -123,7 +105,8 @@ def push_stories(stories_markdown: str, run_id: str) -> None:
             print("  [ Notion ] No stories extracted from output — skipping write")
             return
 
-        db_id = ensure_database(notion, parent_page_id)
+        db_id = create_database(notion, parent_page_id, db_name)
+        print(f"  [ Notion ] Created database '{db_name}'")
 
         for story in stories:
             notion.pages.create(
@@ -142,7 +125,6 @@ def push_stories(stories_markdown: str, run_id: str) -> None:
                         "rich_text": [{"text": {"content": _trunc(story.get("acceptance_criteria", ""))}}]
                     },
                     "Status": {"select": {"name": "To Do"}},
-                    "Run": {"rich_text": [{"text": {"content": run_id}}]},
                 },
             )
 

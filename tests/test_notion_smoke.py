@@ -45,13 +45,12 @@ Acceptance Criteria:
 class TestNotionSmoke(unittest.TestCase):
 
     def test_two_stories_written_to_notion(self):
-        """Writes 2 fixture stories to the real Notion workspace without error."""
+        """Writes 2 fixture stories to a new Notion database without error."""
         from connectors.notion import push_stories
 
-        run_id = "smoke-test-run"
-        push_stories(FIXTURE_MARKDOWN, run_id)
+        push_stories(FIXTURE_MARKDOWN, "smoke-test — 2026-05-21 14:00")
         # If no exception was raised, the write succeeded.
-        # Verify the 2 rows appeared in Notion by eye.
+        # Verify the new database and 2 rows appeared in Notion by eye.
 
     def test_graceful_failure_on_bad_token(self):
         """Bad token must warn and return, not raise."""

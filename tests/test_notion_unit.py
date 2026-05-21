@@ -7,7 +7,7 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-from connectors.notion import parse_stories, ensure_database, push_stories
+from connectors.notion import parse_stories, create_database, push_stories
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -122,59 +122,56 @@ class TestParseStories(unittest.TestCase):
         self.assertEqual(len(result), 3)
 
 
-# ── ensure_database ───────────────────────────────────────────────────────────
+# ── create_database ───────────────────────────────────────────────────────────
 
-class TestEnsureDatabase(unittest.TestCase):
+class TestCreateDatabase(unittest.TestCase):
 
-    def test_reuses_existing_id_without_calling_api(self):
-        mock_client = MagicMock()
-        with patch.dict(os.environ, {"NOTION_DATABASE_ID": "existing-db-abc"}):
-            result = ensure_database(mock_client, "parent-page-123")
-        self.assertEqual(result, "existing-db-abc")
-        mock_client.databases.create.assert_not_called()
-
-    def test_creates_database_when_id_not_set(self):
+    def test_creates_database_with_given_name(self):
         mock_client = MagicMock()
         mock_client.databases.create.return_value = {"id": "new-db-xyz"}
-        env = {k: v for k, v in os.environ.items() if k != "NOTION_DATABASE_ID"}
-        with patch.dict(os.environ, env, clear=True), \
-             patch("connectors.notion.set_key"):
-            result = ensure_database(mock_client, "parent-page-123")
+        result = create_database(mock_client, "parent-page-123", "turnup — 2026-05-21 14:30")
         self.assertEqual(result, "new-db-xyz")
         mock_client.databases.create.assert_called_once()
+        title_arg = mock_client.databases.create.call_args[1]["title"]
+        self.assertEqual(title_arg[0]["text"]["content"], "turnup — 2026-05-21 14:30")
+
+    def test_always_creates_new_database(self):
+        """Every call to create_database hits the API — no caching."""
+        mock_client = MagicMock()
+        mock_client.databases.create.return_value = {"id": "db-1"}
+        create_database(mock_client, "parent-page-123", "run 1")
+        mock_client.databases.create.return_value = {"id": "db-2"}
+        create_database(mock_client, "parent-page-123", "run 2")
+        self.assertEqual(mock_client.databases.create.call_count, 2)
 
     def test_created_database_has_all_required_columns(self):
         mock_client = MagicMock()
-        mock_client.databases.create.return_value = {"id": "new-db-xyz"}
-        env = {k: v for k, v in os.environ.items() if k != "NOTION_DATABASE_ID"}
-        with patch.dict(os.environ, env, clear=True), \
-             patch("connectors.notion.set_key"):
-            ensure_database(mock_client, "parent-page-123")
+        mock_client.databases.create.return_value = {"id": "db-xyz"}
+        create_database(mock_client, "parent-page-123", "test db")
         props = mock_client.databases.create.call_args[1]["properties"]
-        for col in ("Title", "Epic", "Description", "Acceptance Criteria", "Status", "Run"):
+        for col in ("Title", "Epic", "Description", "Acceptance Criteria", "Status"):
             self.assertIn(col, props, f"Missing column: {col}")
 
-    def test_new_id_persisted_to_env(self):
+    def test_no_run_column_in_schema(self):
+        """Run column was removed — each database IS the run."""
         mock_client = MagicMock()
-        mock_client.databases.create.return_value = {"id": "new-db-xyz"}
-        env = {k: v for k, v in os.environ.items() if k != "NOTION_DATABASE_ID"}
-        with patch.dict(os.environ, env, clear=True), \
-             patch("connectors.notion.set_key") as mock_set_key:
-            ensure_database(mock_client, "parent-page-123")
-        mock_set_key.assert_called_once_with(".env", "NOTION_DATABASE_ID", "new-db-xyz")
+        mock_client.databases.create.return_value = {"id": "db-xyz"}
+        create_database(mock_client, "parent-page-123", "test db")
+        props = mock_client.databases.create.call_args[1]["properties"]
+        self.assertNotIn("Run", props)
 
 
 # ── push_stories ──────────────────────────────────────────────────────────────
 
 class TestPushStories(unittest.TestCase):
 
-    def _run(self, stories_md="markdown", run_id="2026-05-21_14-30"):
+    def _run(self, stories_md="markdown", db_name="turnup — 2026-05-21 14:30"):
         mock_notion = MagicMock()
+        mock_notion.databases.create.return_value = {"id": "db-123"}
         with patch.dict(os.environ, {"NOTION_TOKEN": "secret_t", "NOTION_PARENT_PAGE_ID": "pg-1"}), \
              patch("connectors.notion.NotionClient", return_value=mock_notion), \
-             patch("connectors.notion.parse_stories", return_value=PARSED_FIXTURE), \
-             patch("connectors.notion.ensure_database", return_value="db-123"):
-            push_stories(stories_md, run_id)
+             patch("connectors.notion.parse_stories", return_value=PARSED_FIXTURE):
+            push_stories(stories_md, db_name)
         return mock_notion
 
     def test_skips_when_token_missing(self):
@@ -182,59 +179,55 @@ class TestPushStories(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k not in ("NOTION_TOKEN", "NOTION_PARENT_PAGE_ID")}
         with patch.dict(os.environ, env, clear=True), \
              patch("connectors.notion.NotionClient", return_value=mock_notion):
-            push_stories("markdown", "2026-05-21_14-30")
+            push_stories("markdown", "some db")
         mock_notion.pages.create.assert_not_called()
+
+    def test_creates_one_database_per_call(self):
+        mock_notion = self._run()
+        mock_notion.databases.create.assert_called_once()
+
+    def test_database_name_passed_correctly(self):
+        db_name = "turnup — 2026-05-21 14:30"
+        mock_notion = MagicMock()
+        mock_notion.databases.create.return_value = {"id": "db-123"}
+        with patch.dict(os.environ, {"NOTION_TOKEN": "secret_t", "NOTION_PARENT_PAGE_ID": "pg-1"}), \
+             patch("connectors.notion.NotionClient", return_value=mock_notion), \
+             patch("connectors.notion.parse_stories", return_value=PARSED_FIXTURE):
+            push_stories("markdown", db_name)
+        title_arg = mock_notion.databases.create.call_args[1]["title"]
+        self.assertEqual(title_arg[0]["text"]["content"], db_name)
 
     def test_row_count_matches_story_count(self):
         mock_notion = self._run()
         self.assertEqual(mock_notion.pages.create.call_count, len(PARSED_FIXTURE))
 
-    def test_run_id_in_every_row(self):
-        run_id = "2026-05-21_14-30"
-        mock_notion = self._run(run_id=run_id)
-        for call in mock_notion.pages.create.call_args_list:
-            props = call[1]["properties"]
-            stored_run = props["Run"]["rich_text"][0]["text"]["content"]
-            self.assertEqual(stored_run, run_id)
-
     def test_field_mapping_correct(self):
         mock_notion = self._run()
-        first_call_props = mock_notion.pages.create.call_args_list[0][1]["properties"]
-        self.assertIn("Title", first_call_props)
-        self.assertIn("Epic", first_call_props)
-        self.assertIn("Description", first_call_props)
-        self.assertIn("Acceptance Criteria", first_call_props)
-        self.assertIn("Status", first_call_props)
-        self.assertIn("Run", first_call_props)
-        self.assertEqual(first_call_props["Status"]["select"]["name"], "To Do")
+        props = mock_notion.pages.create.call_args_list[0][1]["properties"]
+        for field in ("Title", "Epic", "Description", "Acceptance Criteria", "Status"):
+            self.assertIn(field, props, f"Missing field: {field}")
+        self.assertEqual(props["Status"]["select"]["name"], "To Do")
+
+    def test_no_run_field_in_rows(self):
+        """Run column was removed from schema and row properties."""
+        mock_notion = self._run()
+        props = mock_notion.pages.create.call_args_list[0][1]["properties"]
+        self.assertNotIn("Run", props)
 
     def test_notion_failure_warns_and_does_not_raise(self):
-        """A Notion API error must print a warning, not propagate."""
         mock_notion = MagicMock()
-        mock_notion.pages.create.side_effect = Exception("401 Unauthorized")
+        mock_notion.databases.create.side_effect = Exception("401 Unauthorized")
         with patch.dict(os.environ, {"NOTION_TOKEN": "secret_t", "NOTION_PARENT_PAGE_ID": "pg-1"}), \
              patch("connectors.notion.NotionClient", return_value=mock_notion), \
-             patch("connectors.notion.parse_stories", return_value=PARSED_FIXTURE), \
-             patch("connectors.notion.ensure_database", return_value="db-123"):
-            push_stories("markdown", "2026-05-21_14-30")  # must not raise
-
-    def test_partial_failure_does_not_raise(self):
-        """If a row fails mid-batch, the function catches and warns."""
-        mock_notion = MagicMock()
-        mock_notion.pages.create.side_effect = [None, Exception("timeout"), None]
-        with patch.dict(os.environ, {"NOTION_TOKEN": "secret_t", "NOTION_PARENT_PAGE_ID": "pg-1"}), \
-             patch("connectors.notion.NotionClient", return_value=mock_notion), \
-             patch("connectors.notion.parse_stories", return_value=PARSED_FIXTURE), \
-             patch("connectors.notion.ensure_database", return_value="db-123"):
-            push_stories("markdown", "2026-05-21_14-30")  # must not raise
+             patch("connectors.notion.parse_stories", return_value=PARSED_FIXTURE):
+            push_stories("markdown", "some db")  # must not raise
 
     def test_empty_parse_result_skips_write(self):
         mock_notion = MagicMock()
         with patch.dict(os.environ, {"NOTION_TOKEN": "secret_t", "NOTION_PARENT_PAGE_ID": "pg-1"}), \
              patch("connectors.notion.NotionClient", return_value=mock_notion), \
-             patch("connectors.notion.parse_stories", return_value=[]), \
-             patch("connectors.notion.ensure_database", return_value="db-123"):
-            push_stories("", "2026-05-21_14-30")
+             patch("connectors.notion.parse_stories", return_value=[]):
+            push_stories("", "some db")
         mock_notion.pages.create.assert_not_called()
 
 

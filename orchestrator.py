@@ -277,6 +277,7 @@ def main() -> None:
     title = input_path.stem
     brief = profile.get("brief_mode", False)
     run_id = datetime.now().strftime('%Y-%m-%d_%H-%M')
+    db_name = f"{title} — {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
     label = f"[TEST RUN]  " if brief else ""
     print(f"Product Agent  ·  {label}{input_path.name}\n")
@@ -343,7 +344,7 @@ def main() -> None:
     stories = run_stories(spec, profile)
     print("  ✓ User stories complete\n")
 
-    push_stories(stories, run_id)
+    push_stories(stories, db_name)
 
     output_folder = save_outputs(title, research, feedback, spec, stories, run_id)
 
