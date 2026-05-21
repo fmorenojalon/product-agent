@@ -5,6 +5,7 @@ import re
 import json
 
 from anthropic import Anthropic
+from agent import api_call_with_retry
 
 try:
     from notion_client import Client as NotionClient
@@ -30,28 +31,31 @@ def parse_stories(markdown: str) -> list[dict]:
         return []
 
     client = Anthropic()
+    # Keep title/epic/AC only — omit description to stay well within the output
+    # token budget regardless of how many stories the spec produced.
+    prompt = (
+        "Extract all user stories from the markdown below. "
+        "Return a JSON array. Each object must have exactly these keys: "
+        '"title" (story name, short), '
+        '"epic" (section or epic it belongs to), '
+        '"description" (one sentence summary of the story), '
+        '"acceptance_criteria" (acceptance criteria as a single string, empty string if none). '
+        "Return ONLY valid JSON — no markdown fences, no explanation.\n\n"
+        f"{markdown}"
+    )
     try:
-        response = client.messages.create(
-            model=_PARSE_MODEL,
-            max_tokens=4000,
-            messages=[{
-                "role": "user",
-                "content": (
-                    "Extract all user stories from the markdown below. "
-                    "Return a JSON array. Each object must have exactly these keys: "
-                    '"title" (story name or As-a line), '
-                    '"epic" (section or epic it belongs to), '
-                    '"description" (full story text), '
-                    '"acceptance_criteria" (criteria as a string, empty string if none). '
-                    "Return ONLY valid JSON — no markdown fences, no explanation.\n\n"
-                    f"{markdown}"
-                ),
-            }]
+        response = api_call_with_retry(
+            lambda: client.messages.create(
+                model=_PARSE_MODEL,
+                max_tokens=8000,
+                messages=[{"role": "user", "content": prompt}],
+            )
         )
         text = response.content[0].text.strip()
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
         return json.loads(text)
-    except Exception:
+    except Exception as e:
+        print(f"  [ Notion ] Warning: story parsing failed — {e}")
         return []
 
 
