@@ -259,7 +259,38 @@ Acceptance Criteria, Tracking / Metrics, Linked Stories / Dependencies): `#### S
 """
 
 
+_STORIES_BRIEF = """
+Output exactly this structure and nothing else:
+
+## Epic 1: Placeholder Epic
+
+## Story 1: Placeholder Story
+
+| User Story | Files and Documentation |
+|------------|------------------------|
+| As a test user, I want to validate the pipeline. | Designs: TBD |
+
+#### Background
+Placeholder background.
+
+#### Acceptance Criteria
+
+## Test AC
+- Given the pipeline runs, When stories are generated, Then Notion receives rows.
+"""
+
+
 def run_stories(spec: str, profile: dict, full_scope: bool = True) -> str:
+    brief = profile.get("brief_mode", False)
+    if brief:
+        # In test mode skip the spec entirely — return a hardcoded stub so
+        # parse_stories always finds stories and Notion write is exercised.
+        return run_skill(
+            "product-user-story",
+            _STORIES_BRIEF,
+            profile=profile,
+            step="stories",
+        )
     scope_note = (
         "" if full_scope else
         "\n\nIMPORTANT: Generate stories for ONE epic only — the single most critical epic "

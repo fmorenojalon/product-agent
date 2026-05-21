@@ -102,8 +102,16 @@ def run_skill(
         profile = {}
 
     brief = profile.get("brief_mode", False)
-    raw = open(f"{skill_path}/SKILL.md").read()
-    system_prompt = _strip_frontmatter(raw) + _API_MODE_SUFFIX + (_BRIEF_MODE_SUFFIX if brief else "")
+    if brief:
+        # Skip the full SKILL.md (3000–6000 tokens) — use a micro prompt instead.
+        # Goal is pipeline validation, not quality output.
+        system_prompt = (
+            "Test mode. Output minimal placeholder markdown under 80 words. "
+            "No preamble, no explanation."
+        )
+    else:
+        raw = open(f"{skill_path}/SKILL.md").read()
+        system_prompt = _strip_frontmatter(raw) + _API_MODE_SUFFIX
 
     model = step_model(step, profile)
     max_tokens = step_max_tokens(step, profile)

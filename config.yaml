@@ -2,17 +2,17 @@ profiles:
 
   "1":
     name: "Test — pipeline validation"
-    description: "Haiku, no web search, placeholder output. Validates the full pipeline runs end-to-end."
-    estimated_cost: "$0.04–0.10"
+    description: "Haiku, no web search, micro prompts. Validates pipeline wiring end-to-end."
+    estimated_cost: "$0.01–0.02"
     brief_mode: true
     steps:
-      pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 2000, max_searches: 0 }
-      compress:  { model: claude-haiku-4-5-20251001, max_tokens: 2000, max_searches: 0 }
-      research:  { model: claude-haiku-4-5-20251001, max_tokens: 2000, max_searches: 0 }
-      feedback:  { model: claude-haiku-4-5-20251001, max_tokens: 2000, max_searches: 0 }
-      synthesis: { model: claude-haiku-4-5-20251001, max_tokens: 2000, max_searches: 0 }
-      spec:      { model: claude-haiku-4-5-20251001, max_tokens: 2000, max_searches: 0 }
-      stories:   { model: claude-haiku-4-5-20251001, max_tokens: 2000, max_searches: 0 }
+      pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 400, max_searches: 0 }
+      compress:  { model: claude-haiku-4-5-20251001, max_tokens: 400, max_searches: 0 }
+      research:  { model: claude-haiku-4-5-20251001, max_tokens: 400, max_searches: 0 }
+      feedback:  { model: claude-haiku-4-5-20251001, max_tokens: 400, max_searches: 0 }
+      synthesis: { model: claude-haiku-4-5-20251001, max_tokens: 400, max_searches: 0 }
+      spec:      { model: claude-haiku-4-5-20251001, max_tokens: 400, max_searches: 0 }
+      stories:   { model: claude-haiku-4-5-20251001, max_tokens: 400, max_searches: 0 }
 
   "2":
     name: "Budget — full run, all Haiku"
