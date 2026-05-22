@@ -13,12 +13,16 @@ from agent import api_call_with_retry
 
 # ── Pricing ───────────────────────────────────────────────────────────────────
 # Verify against https://anthropic.com/pricing before each release.
+# cache_write: tokens newly written to prompt cache (billed at ~25% premium over input)
+# cache_read:  tokens read from prompt cache (billed at ~10% of input rate)
+# All per-million-token rates except _SEARCH_RATE which is per-1k-queries.
 RATES_UPDATED = "2026-05-22"
 _RATES: dict[str, dict[str, float]] = {
-    "claude-haiku-4-5-20251001": {"input": 0.80,  "output": 4.00},
-    "claude-sonnet-4-6":         {"input": 3.00,  "output": 15.00},
-    "claude-opus-4-7":           {"input": 15.00, "output": 75.00},
+    "claude-haiku-4-5-20251001": {"input": 0.80,  "output": 4.00,  "cache_write": 1.00,  "cache_read": 0.08},
+    "claude-sonnet-4-6":         {"input": 3.00,  "output": 15.00, "cache_write": 3.75,  "cache_read": 0.30},
+    "claude-opus-4-7":           {"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_read": 1.50},
 }
+_SEARCH_RATE = 10.00  # USD per 1,000 web searches
 _SHORT: dict[str, str] = {
     "claude-haiku-4-5-20251001": "haiku",
     "claude-sonnet-4-6":         "sonnet",
@@ -65,16 +69,32 @@ class StepMetrics:
     latency_s: float
     cost_usd: float
     quality: QualityResult
+    cache_write_tokens: int = 0
+    cache_read_tokens: int = 0
+    search_count: int = 0
 
 
 # ── Cost estimation ───────────────────────────────────────────────────────────
 
-def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    """Return estimated USD cost. Raises ValueError for unknown models."""
+def estimate_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_write_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    search_count: int = 0,
+) -> float:
+    """Return estimated USD cost including cache and search charges. Raises ValueError for unknown models."""
     if model not in _RATES:
         raise ValueError(f"Unknown model: {model!r}. Add it to _RATES in observability.py.")
     r = _RATES[model]
-    return (input_tokens / 1_000_000) * r["input"] + (output_tokens / 1_000_000) * r["output"]
+    return (
+        (input_tokens       / 1_000_000) * r["input"]
+        + (output_tokens    / 1_000_000) * r["output"]
+        + (cache_write_tokens / 1_000_000) * r["cache_write"]
+        + (cache_read_tokens  / 1_000_000) * r["cache_read"]
+        + (search_count       / 1_000)     * _SEARCH_RATE
+    )
 
 
 # ── Heuristic quality check ───────────────────────────────────────────────────
@@ -198,24 +218,43 @@ class RunTracker:
     def total_output_tokens(self) -> int:
         return sum(s.output_tokens for s in self._steps)
 
+    @property
+    def total_cache_write_tokens(self) -> int:
+        return sum(s.cache_write_tokens for s in self._steps)
+
+    @property
+    def total_cache_read_tokens(self) -> int:
+        return sum(s.cache_read_tokens for s in self._steps)
+
+    @property
+    def total_searches(self) -> int:
+        return sum(s.search_count for s in self._steps)
+
     def print_summary(self) -> None:
-        header = f"  {'Step':<12} {'Model':<8} {'In tok':>8} {'Out tok':>8} {'Cost':>9} {'Latency':>8}  Quality"
-        sep = "  " + "─" * 72
+        header = f"  {'Step':<12} {'Model':<8} {'In tok':>8} {'Out tok':>8} {'Srch':>5} {'Cost':>9} {'Latency':>8}  Quality"
+        sep = "  " + "─" * 78
         print(sep)
         print(header)
         print(sep)
         for s in self._steps:
             short = _SHORT.get(s.model, s.model[:8])
+            srch = str(s.search_count) if s.search_count else "-"
             print(
                 f"  {s.step:<12} {short:<8} {s.input_tokens:>8,} {s.output_tokens:>8,}"
-                f"  ${s.cost_usd:>7.4f}  {s.latency_s:>6.1f}s  {_qstr(s.quality)}"
+                f"  {srch:>4}  ${s.cost_usd:>7.4f}  {s.latency_s:>6.1f}s  {_qstr(s.quality)}"
             )
         print(sep)
         print(
             f"  {'TOTAL':<12} {'':8} {self.total_input_tokens:>8,} {self.total_output_tokens:>8,}"
-            f"  ${self.total_cost:>7.4f}  {self.total_latency:>6.1f}s"
+            f"  {self.total_searches:>4}  ${self.total_cost:>7.4f}  {self.total_latency:>6.1f}s"
         )
         print(sep)
+        if self.total_cache_write_tokens or self.total_cache_read_tokens or self.total_searches:
+            print(
+                f"  * cost includes cache write ({self.total_cache_write_tokens:,} tok)"
+                f" + cache read ({self.total_cache_read_tokens:,} tok)"
+                f" + {self.total_searches} search(es)"
+            )
 
     def write(self, folder: Path) -> None:
         self._write_jsonl(folder)
@@ -229,6 +268,9 @@ class RunTracker:
                     "model": s.model,
                     "input_tokens": s.input_tokens,
                     "output_tokens": s.output_tokens,
+                    "cache_write_tokens": s.cache_write_tokens,
+                    "cache_read_tokens": s.cache_read_tokens,
+                    "search_count": s.search_count,
                     "latency_s": round(s.latency_s, 2),
                     "cost_usd": round(s.cost_usd, 6),
                     "quality": {
@@ -243,8 +285,8 @@ class RunTracker:
         lines = [
             f"## Run Report — {self.title} — {self.timestamp}",
             "",
-            "| Step | Model | In tok | Out tok | Est. cost | Latency | Quality |",
-            "|------|-------|-------:|--------:|----------:|--------:|---------|",
+            "| Step | Model | In tok | Cache wr | Cache rd | Searches | Out tok | Est. cost | Latency | Quality |",
+            "|------|-------|-------:|---------:|---------:|---------:|--------:|----------:|--------:|---------|",
         ]
         warnings: list[str] = []
         for s in self._steps:
@@ -253,11 +295,13 @@ class RunTracker:
             if s.quality.warning and s.quality.user_continued is not None:
                 warnings.append(f"- **{s.step}**: {s.quality.warning}")
             lines.append(
-                f"| {s.step} | {short} | {s.input_tokens:,} | {s.output_tokens:,} |"
+                f"| {s.step} | {short} | {s.input_tokens:,} | {s.cache_write_tokens:,} |"
+                f" {s.cache_read_tokens:,} | {s.search_count} | {s.output_tokens:,} |"
                 f" ${s.cost_usd:.4f} | {s.latency_s:.1f}s | {qs} |"
             )
         lines.append(
-            f"| **TOTAL** | | {self.total_input_tokens:,} | {self.total_output_tokens:,} |"
+            f"| **TOTAL** | | {self.total_input_tokens:,} | {self.total_cache_write_tokens:,} |"
+            f" {self.total_cache_read_tokens:,} | {self.total_searches} | {self.total_output_tokens:,} |"
             f" **${self.total_cost:.4f}** | {self.total_latency:.1f}s | |"
         )
         lines += ["", "### Quality warnings", "None." if not warnings else "\n".join(warnings)]

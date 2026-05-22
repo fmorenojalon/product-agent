@@ -125,6 +125,8 @@ def run_skill(
     search_count = 0
     total_input_tokens = 0
     total_output_tokens = 0
+    total_cache_write_tokens = 0
+    total_cache_read_tokens = 0
 
     continuing = False
     for _ in range(50):
@@ -137,6 +139,8 @@ def run_skill(
 
         total_input_tokens += response.usage.input_tokens
         total_output_tokens += response.usage.output_tokens
+        total_cache_write_tokens += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+        total_cache_read_tokens += getattr(response.usage, "cache_read_input_tokens", 0) or 0
 
         for block in response.content:
             if getattr(block, "type", None) in ("tool_use", "server_tool_use"):
@@ -164,5 +168,11 @@ def run_skill(
         else:
             break
 
-    usage = {"input_tokens": total_input_tokens, "output_tokens": total_output_tokens}
+    usage = {
+        "input_tokens": total_input_tokens,
+        "output_tokens": total_output_tokens,
+        "cache_write_tokens": total_cache_write_tokens,
+        "cache_read_tokens": total_cache_read_tokens,
+        "search_count": search_count,
+    }
     return "\n".join(accumulated), usage

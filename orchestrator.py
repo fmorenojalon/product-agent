@@ -68,6 +68,9 @@ def _llm(messages: list, step: str = "", profile: dict | None = None) -> tuple[s
     usage = {
         "input_tokens": response.usage.input_tokens,
         "output_tokens": response.usage.output_tokens,
+        "cache_write_tokens": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+        "cache_read_tokens": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        "search_count": 0,
     }
     return response.content[0].text, usage
 
@@ -328,7 +331,14 @@ def _track_step(
     latency = time.time() - t0
 
     model = step_model(step_name, profile)
-    cost = estimate_cost(model, usage["input_tokens"], usage["output_tokens"])
+    cost = estimate_cost(
+        model,
+        usage["input_tokens"],
+        usage["output_tokens"],
+        usage.get("cache_write_tokens", 0),
+        usage.get("cache_read_tokens", 0),
+        usage.get("search_count", 0),
+    )
     quality = check_quality(step_name, output, profile)
 
     if not quality.passed:
@@ -344,6 +354,9 @@ def _track_step(
         latency_s=latency,
         cost_usd=cost,
         quality=quality,
+        cache_write_tokens=usage.get("cache_write_tokens", 0),
+        cache_read_tokens=usage.get("cache_read_tokens", 0),
+        search_count=usage.get("search_count", 0),
     ))
     return output
 
