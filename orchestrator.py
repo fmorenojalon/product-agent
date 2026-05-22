@@ -212,7 +212,8 @@ def generate_proposals(document: str, research_ctx: str, feedback_ctx: str, prof
             "- A short name (e.g. 'Option 1 — Contextual AI Suggestions')\n"
             "- 2-3 sentences describing the direction\n"
             "- 1-2 sentences grounding it in the research\n\n"
-            "Format them clearly and number them so the user can pick one."
+            "Format them clearly and number them so the user can pick one.\n"
+            "Use only prose and bullet points — no markdown tables."
         ),
     }], step="synthesis", profile=profile)
 
