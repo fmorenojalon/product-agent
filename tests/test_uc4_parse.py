@@ -60,7 +60,7 @@ class TestUC4ParseFormat(unittest.TestCase):
         from orchestrator import _STORIES_FORMAT
 
         profile = load_profile("1")  # brief mode — fastest and cheapest
-        return run_skill(
+        text, _ = run_skill(
             "product-user-story",
             f"Generate epics and user stories for the following product specification:"
             f"\n\n{_FIXTURE_SPEC}"
@@ -69,6 +69,7 @@ class TestUC4ParseFormat(unittest.TestCase):
             profile=profile,
             step="stories",
         )
+        return text
 
     def _assert_parseable(self, raw: str, label: str = "") -> list[dict]:
         from connectors.notion import parse_stories

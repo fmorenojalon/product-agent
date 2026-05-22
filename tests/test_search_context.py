@@ -51,8 +51,8 @@ class TestSearchCountFix(unittest.TestCase):
             _other_block("web_search_tool_result", content=[]),
             _text_block("analysis done"),
         ]
-        result = self._run_single_response(blocks)
-        self.assertEqual(result, "analysis done")
+        text, _ = self._run_single_response(blocks)
+        self.assertEqual(text, "analysis done")
 
     def test_tool_use_still_counted(self):
         """Legacy tool_use blocks must also be counted for backwards compat."""
@@ -60,8 +60,8 @@ class TestSearchCountFix(unittest.TestCase):
             _other_block("tool_use", id="tu1", name="web_search", input={}),
             _text_block("result"),
         ]
-        result = self._run_single_response(blocks)
-        self.assertEqual(result, "result")
+        text, _ = self._run_single_response(blocks)
+        self.assertEqual(text, "result")
 
 
 class TestSearchBlobStripping(unittest.TestCase):

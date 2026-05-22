@@ -24,7 +24,7 @@ Phase 3 makes every pipeline run's cost, latency, and output quality visible and
 
 ## Instrumented Steps
 
-Only the six main pipeline steps are tracked. Pre-step extraction and compression calls are excluded — they are auxiliary and low-cost.
+Only the five main pipeline steps are tracked. Pre-step extraction and compression calls are excluded — they are auxiliary and low-cost.
 
 | Step key   | Skill / call         | Tracked |
 |------------|----------------------|---------|

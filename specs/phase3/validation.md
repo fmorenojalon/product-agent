@@ -69,7 +69,7 @@ python -m pytest tests/test_observability.py -v -k failure
 ```
 
 - [ ] `test_warn_and_continue_yes` — mock `input()` returning `'y'`; pipeline continues; `user_continued=true` in metrics
-- [ ] `test_warn_and_halt_no` — mock `input()` returning `'n'`; `SystemExit` raised with code 1
+- [ ] `test_warn_and_halt_no` — mock `input()` returning `'n'`; `prompt_quality_failure` returns `False`; `_track_step` calls `sys.exit(1)`
 - [ ] `test_failure_reason_printed` — the step name and failure reason appear in captured stdout
 
 ---

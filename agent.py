@@ -93,9 +93,11 @@ def run_skill(
     extra_context: str = "",
     profile: dict | None = None,
     step: str = "",
-) -> str:
+) -> tuple[str, dict]:
     """Run a skill using its SKILL.md as system prompt with an agentic tool-use loop.
 
+    Returns (output_text, usage) where usage = {"input_tokens": int, "output_tokens": int}
+    summed across all continuation rounds.
     Web searches are capped at step_max_searches to control token accumulation.
     """
     if profile is None:
@@ -121,6 +123,8 @@ def run_skill(
     messages = [{"role": "user", "content": content}]
     accumulated: list[str] = []
     search_count = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
 
     continuing = False
     for _ in range(50):
@@ -130,6 +134,9 @@ def run_skill(
             kwargs["tools"] = [SEARCH_TOOL]
 
         response = api_call_with_retry(lambda: client.messages.create(**kwargs))
+
+        total_input_tokens += response.usage.input_tokens
+        total_output_tokens += response.usage.output_tokens
 
         for block in response.content:
             if getattr(block, "type", None) in ("tool_use", "server_tool_use"):
@@ -157,4 +164,5 @@ def run_skill(
         else:
             break
 
-    return "\n".join(accumulated)
+    usage = {"input_tokens": total_input_tokens, "output_tokens": total_output_tokens}
+    return "\n".join(accumulated), usage

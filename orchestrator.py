@@ -16,6 +16,10 @@ from agent import (
 )
 from connectors.discord import fetch_feedback
 from connectors.notion import push_stories
+from observability import (
+    RunTracker, StepMetrics, QualityResult,
+    estimate_cost, check_quality, prompt_quality_failure,
+)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -35,7 +39,7 @@ def _divider(label: str = "") -> None:
 
 def compress(text: str, purpose: str, profile: dict) -> str:
     """Compress a large research/feedback/spec output to a dense summary using Haiku."""
-    return _llm([{
+    result, _ = _llm([{
         "role": "user",
         "content": (
             f"Compress the following {purpose} into 400–600 words of dense bullet-points. "
@@ -44,10 +48,14 @@ def compress(text: str, purpose: str, profile: dict) -> str:
             f"{text}"
         ),
     }], step="compress", profile=profile)
+    return result
 
 
-def _llm(messages: list, step: str = "", profile: dict | None = None) -> str:
-    """Direct Claude API call using per-step model config from the active profile."""
+def _llm(messages: list, step: str = "", profile: dict | None = None) -> tuple[str, dict]:
+    """Direct Claude API call using per-step model config from the active profile.
+
+    Returns (text, usage) where usage = {"input_tokens": int, "output_tokens": int}.
+    """
     if profile is None:
         profile = {}
     response = api_call_with_retry(
@@ -57,7 +65,11 @@ def _llm(messages: list, step: str = "", profile: dict | None = None) -> str:
             messages=messages,
         )
     )
-    return response.content[0].text
+    usage = {
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
+    }
+    return response.content[0].text, usage
 
 
 # ── Profile + mode selection ──────────────────────────────────────────────────
@@ -75,7 +87,8 @@ def select_profile() -> dict:
     while True:
         choice = input(f"Enter profile number ({'/'.join(sorted(profiles))}): ").strip()
         if choice in profiles:
-            selected = profiles[choice]
+            selected = dict(profiles[choice])
+            selected["key"] = choice
             print(f"\n  → {selected['name']}\n")
             return selected
         print(f"  Please enter one of: {', '.join(sorted(profiles))}")
@@ -128,7 +141,7 @@ def _parse_questions(text: str) -> list[str]:
 def run_interactive_interview(
     document: str, research_ctx: str, feedback_ctx: str, chosen_direction: str, profile: dict
 ) -> str:
-    questions_text = _llm([{
+    questions_text, _ = _llm([{
         "role": "user",
         "content": (
             "You are about to generate a product spec (PRD). Review the inputs below and "
@@ -168,7 +181,7 @@ def run_interactive_interview(
 # ── Pipeline steps ────────────────────────────────────────────────────────────
 
 def extract_competitors_and_persona(document: str, profile: dict) -> tuple[list[str], str]:
-    data = _parse_json(_llm([{
+    text, _ = _llm([{
         "role": "user",
         "content": (
             "Read the following product idea document and extract:\n"
@@ -179,35 +192,13 @@ def extract_competitors_and_persona(document: str, profile: dict) -> tuple[list[
             "Return only valid JSON, no explanation.\n\n"
             f"## Product Idea Document\n\n{document}"
         ),
-    }], step="pre_step", profile=profile))
+    }], step="pre_step", profile=profile)
+    data = _parse_json(text)
     return data["competitors"], data["persona"]
 
 
-def run_research(
-    document: str, competitors: list[str], persona: str, profile: dict
-) -> tuple[str, str]:
-    uc1_msg = (
-        "Analyze the competitive landscape for the following product idea.\n\n"
-        f"## Product Idea Document\n\n{document}\n\n"
-        f"Focus your analysis on these competitors: {', '.join(competitors)}"
-    )
-    uc2_msg = (
-        "Research user feedback relevant to the following product idea.\n\n"
-        f"## Product Idea Document\n\n{document}\n\n"
-        f"Target persona: {persona}\n"
-        f"Key products to find feedback on: {', '.join(competitors)}"
-    )
 
-    research = run_skill("product-analysis", uc1_msg, "", profile, "research")
-    print("  ✓ Competitive research complete")
-
-    feedback = run_skill("product-user-feedback", uc2_msg, "", profile, "feedback")
-    print("  ✓ User feedback synthesis complete")
-
-    return research, feedback
-
-
-def generate_proposals(document: str, research_ctx: str, feedback_ctx: str, profile: dict) -> str:
+def generate_proposals(document: str, research_ctx: str, feedback_ctx: str, profile: dict) -> tuple[str, dict]:
     return _llm([{
         "role": "user",
         "content": (
@@ -229,7 +220,7 @@ def generate_proposals(document: str, research_ctx: str, feedback_ctx: str, prof
 def run_spec(
     document: str, chosen_direction: str, research_ctx: str, feedback_ctx: str, profile: dict,
     interview_context: str = "",
-) -> str:
+) -> tuple[str, dict]:
     extra = (
         "PIPELINE CONTEXT — skip the interactive interview and generate the PRD "
         "directly using the information below as pre-filled answers.\n\n"
@@ -280,7 +271,7 @@ Placeholder background.
 """
 
 
-def run_stories(spec: str, profile: dict, full_scope: bool = True) -> str:
+def run_stories(spec: str, profile: dict, full_scope: bool = True) -> tuple[str, dict]:
     brief = profile.get("brief_mode", False)
     if brief:
         # In test mode skip the spec entirely — return a hardcoded stub so
@@ -306,7 +297,8 @@ def run_stories(spec: str, profile: dict, full_scope: bool = True) -> str:
 
 
 def save_outputs(
-    title: str, research: str, feedback: str, spec: str, stories: str, run_id: str
+    title: str, research: str, feedback: str, spec: str, stories: str, run_id: str,
+    tracker: RunTracker | None = None,
 ) -> Path:
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
     folder = Path("output") / f"{run_id}_{slug}"
@@ -315,10 +307,45 @@ def save_outputs(
     (folder / "feedback-synthesis.md").write_text(feedback)
     (folder / "product-spec.md").write_text(spec)
     (folder / "user-stories.md").write_text(stories)
+    if tracker is not None:
+        tracker.write(folder)
     return folder
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
+
+def _track_step(
+    step_name: str,
+    fn,
+    profile: dict,
+    tracker: RunTracker,
+    timestamp: str,
+) -> str:
+    """Call fn(), record metrics, run quality check, prompt on failure. Returns output text."""
+    t0 = time.time()
+    output, usage = fn()
+    latency = time.time() - t0
+
+    model = step_model(step_name, profile)
+    cost = estimate_cost(model, usage["input_tokens"], usage["output_tokens"])
+    quality = check_quality(step_name, output, profile)
+
+    if not quality.passed:
+        quality.user_continued = prompt_quality_failure(step_name, quality, output[:300])
+        if not quality.user_continued:
+            sys.exit(1)
+
+    tracker.record(StepMetrics(
+        step=step_name,
+        model=model,
+        input_tokens=usage["input_tokens"],
+        output_tokens=usage["output_tokens"],
+        latency_s=latency,
+        cost_usd=cost,
+        quality=quality,
+    ))
+    return output
+
 
 def main() -> None:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
@@ -339,7 +366,10 @@ def main() -> None:
     title = input_path.stem
     brief = profile.get("brief_mode", False)
     run_id = datetime.now().strftime('%Y-%m-%d_%H-%M')
-    db_name = f"{title} — {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+    db_name = f"{title} — {timestamp}"
+
+    tracker = RunTracker(title=title, timestamp=timestamp)
 
     label = f"[TEST RUN]  " if brief else ""
     print(f"Product Agent  ·  {label}{input_path.name}\n")
@@ -350,11 +380,34 @@ def main() -> None:
     print(f"  Competitors : {', '.join(competitors)}")
     print(f"  Persona     : {persona}\n")
 
-    # Phase A — parallel research
+    # Phase A — research + feedback (tracked)
     print("[ Phase A ] Competitive research + user feedback...")
     phase_a_start = time.time()
-    research, feedback = run_research(document, competitors, persona, profile)
-    print()
+
+    uc1_msg = (
+        "Analyze the competitive landscape for the following product idea.\n\n"
+        f"## Product Idea Document\n\n{document}\n\n"
+        f"Focus your analysis on these competitors: {', '.join(competitors)}"
+    )
+    research = _track_step(
+        "research",
+        lambda: run_skill("product-analysis", uc1_msg, "", profile, "research"),
+        profile, tracker, timestamp,
+    )
+    print("  ✓ Competitive research complete")
+
+    uc2_msg = (
+        "Research user feedback relevant to the following product idea.\n\n"
+        f"## Product Idea Document\n\n{document}\n\n"
+        f"Target persona: {persona}\n"
+        f"Key products to find feedback on: {', '.join(competitors)}"
+    )
+    feedback = _track_step(
+        "feedback",
+        lambda: run_skill("product-user-feedback", uc2_msg, "", profile, "feedback"),
+        profile, tracker, timestamp,
+    )
+    print("  ✓ User feedback synthesis complete\n")
 
     # Compress Phase A outputs — one Haiku call each produces a dense summary
     # used by all downstream steps instead of raw-truncating
@@ -377,9 +430,13 @@ def main() -> None:
             time.sleep(remaining)
             print()
 
-    # Synthesis
+    # Synthesis (tracked)
     print("[ Synthesis ] Generating product direction proposals...")
-    proposals = generate_proposals(document, research_ctx, feedback_ctx, profile)
+    proposals = _track_step(
+        "synthesis",
+        lambda: generate_proposals(document, research_ctx, feedback_ctx, profile),
+        profile, tracker, timestamp,
+    )
     _divider()
     print(proposals)
     _divider()
@@ -397,24 +454,35 @@ def main() -> None:
             document, research_ctx, feedback_ctx, chosen, profile
         )
 
-    # Phase B — sequential
+    # Phase B — spec + stories (tracked)
     print("[ Phase B ] Drafting product spec...")
-    spec = run_spec(document, chosen, research_ctx, feedback_ctx, profile, interview_context)
+    spec = _track_step(
+        "spec",
+        lambda: run_spec(document, chosen, research_ctx, feedback_ctx, profile, interview_context),
+        profile, tracker, timestamp,
+    )
     print("  ✓ Spec complete\n")
 
     print("[ Phase B ] Generating user stories...")
-    stories = run_stories(spec, profile, full_scope)
+    stories = _track_step(
+        "stories",
+        lambda: run_stories(spec, profile, full_scope),
+        profile, tracker, timestamp,
+    )
     print("  ✓ User stories complete\n")
 
     push_stories(stories, db_name)
 
-    output_folder = save_outputs(title, research, feedback, spec, stories, run_id)
+    output_folder = save_outputs(title, research, feedback, spec, stories, run_id, tracker)
 
+    _divider("  Run summary")
+    tracker.print_summary()
     _divider("  Run complete")
     print(f"  Profile       : {profile['name']}")
     print(f"  Output folder : {output_folder}/")
     print(  "  Files         : research-brief.md · feedback-synthesis.md")
     print(  "                  product-spec.md · user-stories.md")
+    print(  "                  run-report.md · run-metrics.jsonl")
     _divider()
     print()
 
