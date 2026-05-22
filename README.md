@@ -10,11 +10,11 @@ A multi-agent system where Claude agents orchestrate end-to-end product manageme
 
 The pipeline has two phases separated by a human decision gate:
 
-1. **Research phase (parallel):** competitive research + user feedback synthesis run simultaneously
+1. **Research phase:** competitive research + user feedback synthesis run sequentially
 2. **You choose a direction:** the agent presents 2–3 product proposals grounded in the research; you pick one
 3. **Specification phase:** spec drafting and user story generation run sequentially from your confirmed direction
 
-Integrations: Notion (user story output), Discord (user feedback input). Agent observability included: latency, cost attribution per agent, and handoff quality metrics.
+Integrations: Notion (user story output). Observability included: per-step latency, cost attribution (input, cache, and search charges), and handoff quality checks with interactive failure prompts.
 
 ---
 
@@ -60,7 +60,7 @@ Product Agent  ·  idea.md
   Competitors : Asana, Linear, Monday.com
   Persona     : project manager
 
-[ Phase A ] Competitive research + user feedback running in parallel...
+[ Phase A ] Competitive research + user feedback...
   ✓ Competitive research complete
   ✓ User feedback synthesis complete
 
@@ -89,13 +89,29 @@ Which direction do you want to pursue? (enter a number or describe your choice):
 [ Phase B ] Generating user stories...
   ✓ User stories complete
 
-[ Notion ] Mock — stories would be pushed to Notion in Phase 2.
+──────────────────────────────────────────────────────────────────────
+  Run summary
+──────────────────────────────────────────────────────────────────────
+  Step         Model     In tok   Out tok  Srch      Cost  Latency  Quality
+  ────────────────────────────────────────────────────────────────────────────
+  research     sonnet     4,821     3,102     4  $ 0.0612   18.3s  ✓
+  feedback     sonnet     3,944     2,871     3  $ 0.0532   15.1s  ✓
+  synthesis    haiku      1,203       412     -  $ 0.0026    3.1s  ✓
+  spec         sonnet     6,203     5,441     -  $ 0.0558   22.7s  ✓
+  stories      sonnet     7,102     4,983     -  $ 0.0593   26.2s  ✓
+  ────────────────────────────────────────────────────────────────────────────
+  TOTAL                  23,273    16,809     7  $ 0.2321   85.4s
+  ────────────────────────────────────────────────────────────────────────────
+  * cost includes cache write (9,813 tok) + cache read (10,225 tok) + 7 search(es)
 
 ──────────────────────────────────────────────────────────────────────
   Run complete
+──────────────────────────────────────────────────────────────────────
+  Profile       : Balanced — Sonnet for quality steps
   Output folder : output/2026-05-19_idea/
   Files         : research-brief.md · feedback-synthesis.md
                   product-spec.md · user-stories.md
+                  run-report.md · run-metrics.jsonl
 ──────────────────────────────────────────────────────────────────────
 ```
 
@@ -109,7 +125,9 @@ output/
     ├── research-brief.md        # UC-1 competitive research
     ├── feedback-synthesis.md    # UC-2 user feedback report
     ├── product-spec.md          # UC-3 product specification
-    └── user-stories.md          # UC-4 user stories
+    ├── user-stories.md          # UC-4 user stories
+    ├── run-report.md            # per-step cost/latency/quality table
+    └── run-metrics.jsonl        # machine-readable metrics (one JSON object per step)
 ```
 
 ---
@@ -145,14 +163,23 @@ At startup you are prompted to choose a run profile. Profiles are defined in `co
 
 Each profile configures per-step `model`, `max_tokens`, and `max_searches`. To customise, edit `config.yaml` directly.
 
-### Other settings
+### Notion setup
 
-| Key | Description |
-|---|---|
-| `discord.channels` | Discord channel IDs to pull feedback from (Phase 2) |
-| `notion.database_id` | Notion database for user stories (Phase 2) |
+User stories are pushed to Notion at the end of every run. Add these to your `.env`:
 
-Secrets (API keys) go in `.env` — never committed.
+```
+NOTION_TOKEN=secret_...          # Integration token from notion.so/my-integrations
+NOTION_PARENT_PAGE_ID=...        # ID of the Notion page that will contain all run databases
+```
+
+Setup steps:
+1. Go to [notion.so/my-integrations](https://notion.so/my-integrations) → create a new integration → copy the token
+2. In Notion, open the page where you want the databases → Share → Invite your integration
+3. Copy the page ID from the URL (the 32-char hex after the last `/`)
+
+Each run creates a new database named `"{title} — YYYY-MM-DD HH:MM"` under that page. If `NOTION_TOKEN` is missing, the pipeline continues and writes local files only.
+
+Secrets go in `.env` — never committed.
 
 ---
 
@@ -160,15 +187,17 @@ Secrets (API keys) go in `.env` — never committed.
 
 ```
 product-agent/
-├── orchestrator.py              # main entry point
-├── agent.py                     # skill runner and agentic loop
+├── orchestrator.py              # main entry point and pipeline logic
+├── agent.py                     # skill runner, agentic loop, web search
+├── observability.py             # cost, latency, and quality tracking
 ├── idea-template.md             # starter template for input documents
 ├── idea.md                      # your input document (gitignored)
 ├── config.yaml                  # pipeline configuration
 ├── .env.example                 # secrets template
 ├── connectors/
-│   ├── discord.py               # Discord feedback connector
+│   ├── discord.py               # stub (Discord integration not active)
 │   └── notion.py                # Notion output connector
+├── tests/                       # unit and integration tests
 ├── product-analysis/            # competitive research skill
 ├── product-user-feedback/       # user feedback synthesis skill
 ├── product-specification/       # spec drafting skill
