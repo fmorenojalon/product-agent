@@ -76,6 +76,17 @@ def test_heuristic_synthesis_fail_too_few_proposals():
     assert "proposal" in reason.lower()
 
 
+def test_heuristic_synthesis_pass_numbered_list():
+    ok, _ = heuristic_check("synthesis", "1. Option A\n2. Option B")
+    assert ok
+
+
+def test_heuristic_synthesis_pass_option_headers():
+    output = "## **Option 1 — Community Platform**\n\nsome text\n\n## **Option 2 — Events First**\n\nmore text"
+    ok, _ = heuristic_check("synthesis", output)
+    assert ok
+
+
 def test_heuristic_stories_fail_no_stories():
     ok, reason = heuristic_check("stories", "Some text without story headers")
     assert not ok

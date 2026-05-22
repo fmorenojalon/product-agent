@@ -90,7 +90,11 @@ def heuristic_check(step: str, output: str) -> tuple[bool, str]:
         return False, "no '## ' section headers found"
 
     if "min_proposals" in cfg:
-        n = len(re.findall(r"^\s*\d+[\.\)]\s+\S", output, re.MULTILINE))
+        # Match either numbered list items (1. / 1)) or numbered Option headers (## Option 1 / ## **Option 1)
+        n = len(re.findall(
+            r"(?:^\s*\d+[\.\)]\s+\S|^#{1,4}\s+\*{0,2}Option\s+\d+)",
+            output, re.MULTILINE | re.IGNORECASE,
+        ))
         if n < cfg["min_proposals"]:
             return False, f"only {n} numbered proposal(s), need ≥ {cfg['min_proposals']}"
 
