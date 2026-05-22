@@ -50,7 +50,7 @@ requirements.txt
 output/               # generated artefacts (gitignored)
 ```
 
-**Exit criteria:** Running `python orchestrator.py "idea"` completes the full flow — pre-step extraction, parallel research, proposal presentation, user selection, spec, and user story output — with all artefacts saved to `output/`.
+**Exit criteria:** Running `python orchestrator.py idea.md` completes the full flow — pre-step extraction, sequential research, proposal presentation, user selection, spec, and user story output — with all artefacts saved to `output/`.
 
 ---
 
@@ -59,13 +59,12 @@ output/               # generated artefacts (gitignored)
 **Goal:** Replace mock connectors with real integrations so the pipeline reads live Discord feedback and writes user stories to Notion.
 
 **Scope:**
-- **Discord connector:** Authenticate via Discord REST API; fetch recent messages from configured channels; inject into the UC-2 synthesis step alongside web-sourced feedback.
-- **Notion connector:** Authenticate via Notion API; create user stories as database rows or pages in a configured workspace.
-- `config.yaml` fully wired: channel IDs, Notion database ID, model name.
-- Secret management via `.env`.
+- **Notion connector:** Authenticate via Notion API; create user stories as database rows in a configured workspace. One new database per run, named `"{title} — YYYY-MM-DD HH:MM"`.
+- **Discord connector:** Dropped. `product-user-feedback` already runs `site:reddit.com` queries via Anthropic hosted web search; a Discord API integration would add a credential with no additional signal.
+- Secret management via `.env` (`NOTION_TOKEN`, `NOTION_PARENT_PAGE_ID`).
 - End-to-end smoke test with real credentials.
 
-**Exit criteria:** A single `python orchestrator.py "idea"` run results in user stories appearing in the configured Notion workspace, with Discord feedback included in the UC-2 synthesis.
+**Exit criteria:** A single `python orchestrator.py idea.md` run results in user stories appearing in the configured Notion workspace. If Notion is unreachable, the pipeline continues and local files are still written.
 
 ---
 
@@ -75,11 +74,11 @@ output/               # generated artefacts (gitignored)
 
 **Scope:**
 - **Latency tracking:** Wall-clock time recorded around each agent call and the synthesis step.
-- **Cost attribution:** Input/output token counts extracted from each Claude API response, mapped to agent name and task ID; estimated USD cost computed per step.
+- **Cost attribution:** Input, output, cache write, and cache read token counts extracted from each Claude API response; web search query count tracked; estimated USD computed per step including all charge types.
 - **Handoff quality:** Each step's output validated before passing downstream via heuristic checks (all profiles) and an optional Haiku LLM confidence score (profiles 3 and 4). Failures prompt the user to continue or halt.
 - **Logging:** Per-step metrics written to `output/<run>/run-metrics.jsonl` (one JSON object per step).
 - **Run report:** Human-readable markdown table written to `output/<run>/run-report.md` alongside the existing output files.
-- **Summary table:** Printed to the terminal at pipeline end — model, tokens in/out, estimated cost, latency, and quality per step.
+- **Summary table:** Printed to the terminal at pipeline end — model, tokens in/out, search count, estimated cost, latency, and quality per step; footnote shows total cache and search charges.
 
 **Exit criteria:** Every pipeline run produces `run-metrics.jsonl` and `run-report.md` in the output folder, and prints a per-step summary table to the terminal. Handoff failures produce visible warnings and prompt the user before the pipeline continues or halts.
 

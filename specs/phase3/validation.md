@@ -53,7 +53,7 @@ python orchestrator.py idea.md   # select profile 1, scope 1
 
 - [ ] `output/<run>/run-report.md` exists and contains a markdown table with 5 data rows
 - [ ] `output/<run>/run-metrics.jsonl` exists and contains 5 lines of valid JSON
-- [ ] Each JSONL line has keys: `step`, `model`, `input_tokens`, `output_tokens`, `latency_s`, `cost_usd`, `quality`
+- [ ] Each JSONL line has keys: `step`, `model`, `input_tokens`, `output_tokens`, `cache_write_tokens`, `cache_read_tokens`, `search_count`, `latency_s`, `cost_usd`, `quality`
 - [ ] Terminal prints the summary table before the final output paths message
 - [ ] `llm_score` is `null` in all JSONL lines (profile 1 = heuristic only)
 - [ ] All quality checks pass (no interactive prompt triggered)
@@ -105,7 +105,7 @@ python orchestrator.py idea.md   # select profile 3, scope 1
 A single `python orchestrator.py idea.md` run (profile 3, balanced, full scope) results in:
 
 1. All four existing markdown files written to `output/<run>/`
-2. `run-report.md` written with a 5-row table showing model, tokens, cost, latency, quality per step
+2. `run-report.md` written with a 5-row table showing model, tokens (input/cache wr/cache rd/output), searches, cost, latency, quality per step
 3. `run-metrics.jsonl` written with one JSON object per step, `llm_score` populated
 4. Terminal prints the summary table before the final paths message
 5. If any step output fails the heuristic or scores ≤ 2, the user is prompted before the pipeline continues
