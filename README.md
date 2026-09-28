@@ -2,7 +2,7 @@
 
 ## Intro
 
-A multi-agent system that takes a product idea from raw research to Notion-ready user stories. Claude skills coordinated by a Python orchestrator, with a human decision gate between research and specification.
+An AI product-research pipeline that takes a product idea from raw research to Notion-ready user stories. Claude skills coordinated by a Python orchestrator, with a human decision gate between research and specification.
 
 Product Agent helps product leads, product managers, and senior management working on strategy to take decisions or get in-depth insights about adding new products or features into their existing portfolio.
 
