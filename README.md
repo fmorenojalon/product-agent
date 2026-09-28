@@ -8,7 +8,7 @@ Product Agent helps product leads, product managers, and senior management worki
 
 ## Concept
 
-A multi-agent system where Claude agents orchestrate end-to-end product management workflows. Five Claude skills (product-analysis, product-user-feedback, product-roadmap-fit, product-specification, product-user-story) are coordinated by a Python orchestrator to take a product idea from raw research all the way to Notion-ready user stories.
+An agentic system where a Python orchestrator coordinates five Claude skills (product-analysis, product-user-feedback, product-roadmap-fit, product-specification, product-user-story) to take a product idea from raw research all the way to Notion-ready user stories.
 
 The pipeline has two phases separated by a human decision gate:
 
