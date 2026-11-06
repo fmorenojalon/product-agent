@@ -27,11 +27,23 @@ def results_block():
     return SimpleNamespace(type="web_search_tool_result", content=[])
 
 
-def make_response(stop_reason, *blocks, usage=None, stop_details=None):
+def make_response(stop_reason, *blocks, usage=None, stop_details=None, headers=None):
+    """A final message. headers are the HTTP headers its stream was served with."""
     return SimpleNamespace(
         stop_reason=stop_reason, content=list(blocks),
-        usage=usage or make_usage(), stop_details=stop_details,
+        usage=usage or make_usage(), stop_details=stop_details, headers=headers or {},
     )
+
+
+def rate_limit_headers(input_left=None, input_limit=None, output_left=None, output_limit=None):
+    """The anthropic-ratelimit-* headers the API sends, for the figures given."""
+    figures = {
+        "anthropic-ratelimit-input-tokens-remaining": input_left,
+        "anthropic-ratelimit-input-tokens-limit": input_limit,
+        "anthropic-ratelimit-output-tokens-remaining": output_left,
+        "anthropic-ratelimit-output-tokens-limit": output_limit,
+    }
+    return {name: str(value) for name, value in figures.items() if value is not None}
 
 
 class _Response:
@@ -60,10 +72,24 @@ class _FakeStream:
         self._item = item
 
     def __enter__(self):
+        # Opening the stream is when the SDK raises an HTTP error or a connection error. Only an
+        # error event inside a stream (status 200) is raised later, while the message is read.
+        if isinstance(self._item, Exception) and not self._is_mid_stream():
+            raise self._item
         return self
+
+    def _is_mid_stream(self):
+        return isinstance(self._item, anthropic.APIStatusError) and self._item.status_code < 300
 
     def __exit__(self, *exc):
         return False
+
+    @property
+    def response(self):
+        """The HTTP response of the stream, which is where the SDK exposes its headers."""
+        if isinstance(self._item, Exception):
+            return getattr(self._item, "response", SimpleNamespace(headers={}))
+        return SimpleNamespace(headers=self._item.headers)
 
     def get_final_message(self):
         if isinstance(self._item, Exception):

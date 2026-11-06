@@ -72,6 +72,32 @@ class StepMetrics:
     cache_write_tokens: int = 0
     cache_read_tokens: int = 0
     search_count: int = 0
+    wait_s: float = 0.0
+    rate_limited: int = 0
+    server_errors: int = 0
+    other_retries: int = 0
+    min_input_tokens_remaining: int | None = None
+    input_tokens_limit: int | None = None
+    min_output_tokens_remaining: int | None = None
+    output_tokens_limit: int | None = None
+
+    @property
+    def active_s(self) -> float:
+        """Latency without the time spent waiting to retry."""
+        return max(self.latency_s - self.wait_s, 0.0)
+
+
+# The wait, retry and rate-limit fields that agent.complete() returns in its usage.
+_TELEMETRY_FIELDS = (
+    "wait_s", "rate_limited", "server_errors", "other_retries",
+    "min_input_tokens_remaining", "input_tokens_limit",
+    "min_output_tokens_remaining", "output_tokens_limit",
+)
+
+
+def telemetry_from_usage(usage: dict) -> dict:
+    """Those fields of a call's usage, as StepMetrics keyword arguments (absent ones keep their defaults)."""
+    return {name: usage[name] for name in _TELEMETRY_FIELDS if name in usage}
 
 
 # ── Cost estimation ───────────────────────────────────────────────────────────
@@ -221,6 +247,7 @@ class RunTracker:
                 cache_write_tokens=d.get("cache_write_tokens", 0),
                 cache_read_tokens=d.get("cache_read_tokens", 0),
                 search_count=d.get("search_count", 0),
+                **{name: d[name] for name in _TELEMETRY_FIELDS if name in d},
             ))
         return tracker
 
@@ -255,9 +282,44 @@ class RunTracker:
     def total_searches(self) -> int:
         return sum(s.search_count for s in self._steps)
 
+    @property
+    def total_wait_s(self) -> float:
+        return sum(s.wait_s for s in self._steps)
+
+    @property
+    def total_active_s(self) -> float:
+        return sum(s.active_s for s in self._steps)
+
+    @property
+    def total_rate_limited(self) -> int:
+        return sum(s.rate_limited for s in self._steps)
+
+    @property
+    def total_server_errors(self) -> int:
+        return sum(s.server_errors for s in self._steps)
+
+    @property
+    def total_other_retries(self) -> int:
+        return sum(s.other_retries for s in self._steps)
+
+    def _lowest_allowance(self, kind: str) -> tuple[str, int, int | None] | None:
+        """(step, tokens left, limit) for the step that saw the least input or output allowance left."""
+        seen = [
+            (getattr(s, f"min_{kind}_tokens_remaining"), s)
+            for s in self._steps
+            if getattr(s, f"min_{kind}_tokens_remaining") is not None
+        ]
+        if not seen:
+            return None
+        left, step = min(seen, key=lambda pair: pair[0])
+        return step.step, left, getattr(step, f"{kind}_tokens_limit")
+
     def print_summary(self) -> None:
-        header = f"  {'Step':<12} {'Model':<8} {'In tok':>8} {'Out tok':>8} {'Srch':>5} {'Cost':>9} {'Latency':>8}  Quality"
-        sep = "  " + "─" * 78
+        header = (
+            f"  {'Step':<12} {'Model':<8} {'In tok':>8} {'Out tok':>8} {'Srch':>5} {'Cost':>9}"
+            f" {'Latency':>8} {'Wait':>7}  Quality"
+        )
+        sep = "  " + "─" * 86
         print(sep)
         print(header)
         print(sep)
@@ -266,12 +328,13 @@ class RunTracker:
             srch = str(s.search_count) if s.search_count else "-"
             print(
                 f"  {s.step:<12} {short:<8} {s.input_tokens:>8,} {s.output_tokens:>8,}"
-                f"  {srch:>4}  ${s.cost_usd:>7.4f}  {s.latency_s:>6.1f}s  {_qstr(s.quality)}"
+                f"  {srch:>4}  ${s.cost_usd:>7.4f}  {s.latency_s:>6.1f}s {_wait_cell(s.wait_s)}  {_qstr(s.quality)}"
             )
         print(sep)
         print(
             f"  {'TOTAL':<12} {'':8} {self.total_input_tokens:>8,} {self.total_output_tokens:>8,}"
             f"  {self.total_searches:>4}  ${self.total_cost:>7.4f}  {self.total_latency:>6.1f}s"
+            f" {_wait_cell(self.total_wait_s)}"
         )
         print(sep)
         if self.total_cache_write_tokens or self.total_cache_read_tokens or self.total_searches:
@@ -280,6 +343,17 @@ class RunTracker:
                 f" + cache read ({self.total_cache_read_tokens:,} tok)"
                 f" + {self.total_searches} search(es)"
             )
+        retries = self.total_rate_limited + self.total_server_errors + self.total_other_retries
+        if retries:
+            print(
+                f"  * {retries} {'retry' if retries == 1 else 'retries'}, {self.total_wait_s:.0f}s waiting: {self.total_rate_limited} rate-limited, "
+                f"{self.total_server_errors} server errors, {self.total_other_retries} other"
+            )
+        for kind in ("input", "output"):
+            lowest = self._lowest_allowance(kind)
+            if lowest:
+                step, left, limit = lowest
+                print(f"  * lowest {kind}-token allowance left: {left:,}{_of(limit)} ({step})")
 
     def write(self, folder: Path) -> None:
         self._write_jsonl(folder)
@@ -297,6 +371,15 @@ class RunTracker:
                     "cache_read_tokens": s.cache_read_tokens,
                     "search_count": s.search_count,
                     "latency_s": round(s.latency_s, 2),
+                    "active_s": round(s.active_s, 2),
+                    "wait_s": round(s.wait_s, 2),
+                    "rate_limited": s.rate_limited,
+                    "server_errors": s.server_errors,
+                    "other_retries": s.other_retries,
+                    "min_input_tokens_remaining": s.min_input_tokens_remaining,
+                    "input_tokens_limit": s.input_tokens_limit,
+                    "min_output_tokens_remaining": s.min_output_tokens_remaining,
+                    "output_tokens_limit": s.output_tokens_limit,
                     "cost_usd": round(s.cost_usd, 6),
                     "quality": {
                         "heuristic_ok": s.quality.heuristic_ok,
@@ -310,8 +393,8 @@ class RunTracker:
         lines = [
             f"## Run Report — {self.title} — {self.timestamp}",
             "",
-            "| Step | Model | In tok | Cache wr | Cache rd | Searches | Out tok | Est. cost | Latency | Quality |",
-            "|------|-------|-------:|---------:|---------:|---------:|--------:|----------:|--------:|---------|",
+            "| Step | Model | In tok | Cache wr | Cache rd | Searches | Out tok | Est. cost | Latency | Active | Wait | Retries 429/5xx/other | Quality |",
+            "|------|-------|-------:|---------:|---------:|---------:|--------:|----------:|--------:|-------:|-----:|----------------------:|---------|",
         ]
         warnings: list[str] = []
         for s in self._steps:
@@ -322,15 +405,46 @@ class RunTracker:
             lines.append(
                 f"| {s.step} | {short} | {s.input_tokens:,} | {s.cache_write_tokens:,} |"
                 f" {s.cache_read_tokens:,} | {s.search_count} | {s.output_tokens:,} |"
-                f" ${s.cost_usd:.4f} | {s.latency_s:.1f}s | {qs} |"
+                f" ${s.cost_usd:.4f} | {s.latency_s:.1f}s | {s.active_s:.1f}s | {s.wait_s:.1f}s |"
+                f" {s.rate_limited}/{s.server_errors}/{s.other_retries} | {qs} |"
             )
         lines.append(
             f"| **TOTAL** | | {self.total_input_tokens:,} | {self.total_cache_write_tokens:,} |"
             f" {self.total_cache_read_tokens:,} | {self.total_searches} | {self.total_output_tokens:,} |"
-            f" **${self.total_cost:.4f}** | {self.total_latency:.1f}s | |"
+            f" **${self.total_cost:.4f}** | {self.total_latency:.1f}s | {self.total_active_s:.1f}s |"
+            f" {self.total_wait_s:.1f}s | {self.total_rate_limited}/{self.total_server_errors}/{self.total_other_retries} | |"
         )
+        headroom = [s for s in self._steps if s.min_input_tokens_remaining is not None or s.min_output_tokens_remaining is not None]
+        if headroom:
+            lines += [
+                "",
+                "### Rate-limit headroom",
+                "",
+                "The least allowance the API reported as left during each step. The API sends these values when a response starts and rounds them to the nearest thousand.",
+                "",
+                "| Step | Input tokens left | Input limit | Output tokens left | Output limit |",
+                "|------|------------------:|------------:|-------------------:|-------------:|",
+            ]
+            for s in headroom:
+                lines.append(
+                    f"| {s.step} | {_num(s.min_input_tokens_remaining)} | {_num(s.input_tokens_limit)} |"
+                    f" {_num(s.min_output_tokens_remaining)} | {_num(s.output_tokens_limit)} |"
+                )
         lines += ["", "### Quality warnings", "None." if not warnings else "\n".join(warnings)]
         (folder / "run-report.md").write_text("\n".join(lines) + "\n")
+
+
+def _wait_cell(wait_s: float) -> str:
+    """Seven-character cell for the Wait column of the terminal summary."""
+    return f"{wait_s:>6.1f}s" if wait_s else f"{'-':>7}"
+
+
+def _num(value: int | None) -> str:
+    return f"{value:,}" if value is not None else "–"
+
+
+def _of(limit: int | None) -> str:
+    return f" of {limit:,}" if limit else ""
 
 
 def _qstr(q: QualityResult) -> str:

@@ -101,8 +101,9 @@ tests/
 - **Pinned SDK version.**
 - **Stop-reason handling:** one loop runs skills and direct calls; it resumes paused search turns, continues past `max_tokens`, and raises on anything else instead of saving a partial output.
 - **Request load:** the search cap is sent to the API as `max_uses`, steps that search use prompt caching, every request is streamed, and `max_tokens` ceilings are set above the expected output. There is no fixed pause between phases. The constraints that come with this are listed in rate-management.md.
+- **Wait and limit telemetry:** each step records its active and waiting time, its retries by kind (rate-limited, server error, other) and the least input and output allowance the API reported as left, read from the rate-limit headers.
 
-**Exit criteria:** Killing a run at any step and resuming repeats no finished step; a permanent API error makes exactly one request; every wait over 5 seconds is printed with its reason; a paused search turn is resumed and a refusal stops the run instead of saving a partial output; the search cap is enforced by the API and no fixed pause separates steps.
+**Exit criteria:** Killing a run at any step and resuming repeats no finished step; a permanent API error makes exactly one request; every wait over 5 seconds is printed with its reason; a paused search turn is resumed and a refusal stops the run instead of saving a partial output; the search cap is enforced by the API and no fixed pause separates steps; each step's metrics separate its waiting from its working time.
 
 **Files introduced in Phase 4:**
 ```
@@ -113,5 +114,6 @@ tests/
   test_resume.py
   test_stop_reasons.py
   test_request_load.py
+  test_telemetry.py
   fakes.py
 ```

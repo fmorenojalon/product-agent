@@ -9,7 +9,7 @@ Phase 3 makes every pipeline run's cost, latency, and output quality visible and
 - **Latency tracking**: wall-clock time recorded around every instrumented step call
 - **Cost attribution**: input, output, cache write, and cache read token counts extracted from each Claude API response; web search query count tracked; estimated USD computed using hardcoded per-model rates including cache and search charges
 - **Handoff quality checks**: each step's output is validated before passing downstream; failures trigger an interactive warn + ask prompt
-- **Terminal summary**: per-step table printed at pipeline end (model, tokens in/out, search count, cost, latency); footnote shows total cache and search charges
+- **Terminal summary**: per-step table printed at pipeline end (model, tokens in/out, search count, cost, latency, wait); footnotes show total cache and search charges, retries, and the lowest rate-limit allowance left
 - **`run-report.md`**: human-readable markdown table written to `output/<run>/` alongside the existing files
 - **`run-metrics.jsonl`**: machine-readable log written to `output/<run>/`; one JSON object per step
 
@@ -95,6 +95,8 @@ None.
 
 If a step was warned and continued, Quality shows `⚠` and the reason appears in the Quality warnings section.
 
+The report also has Active, Wait and Retries columns and, when the API sent rate-limit headers, a rate-limit headroom table. See [rate-management.md](../rate-management.md).
+
 ### `run-metrics.jsonl`
 
 One JSON object per line. Each object:
@@ -109,6 +111,15 @@ One JSON object per line. Each object:
   "cache_read_tokens": 0,
   "search_count": 4,
   "latency_s": 18.3,
+  "active_s": 18.3,
+  "wait_s": 0.0,
+  "rate_limited": 0,
+  "server_errors": 0,
+  "other_retries": 0,
+  "min_input_tokens_remaining": 1988000,
+  "input_tokens_limit": 2000000,
+  "min_output_tokens_remaining": 399000,
+  "output_tokens_limit": 400000,
   "cost_usd": 0.061,
   "quality": {
     "heuristic_ok": true,
@@ -119,7 +130,7 @@ One JSON object per line. Each object:
 }
 ```
 
-`llm_score` is `null` for profiles 1 and 2. `user_continued` is `null` if no failure occurred, `true` if the user chose to continue past a failure, `false` if the pipeline halted.
+`llm_score` is `null` for profiles 1 and 2. `user_continued` is `null` if no failure occurred, `true` if the user chose to continue past a failure, `false` if the pipeline halted. The four rate-limit fields are `null` when the API sent no such header.
 
 ---
 

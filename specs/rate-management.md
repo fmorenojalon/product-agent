@@ -20,7 +20,7 @@ Out of scope: a limiter shared across machines or runs, Priority Tier, the Batch
 | 5xx and 529 (overloaded) are transient | Retry with backoff |
 | A paused search turn, sent back as the SDK serialises it (an assistant message ending at the search result, same tools), is accepted and the model finishes the answer. Checked once on Haiku 4.5, with the pause simulated by cutting a finished turn | Resume as designed. Sonnet and Opus are not checked |
 | `max_uses` caps the searches in one turn, including across a `pause_turn` resume. A search that fails still counts against it but is not billed | The cap is sent to the API and relied on. Searches are counted from `usage`, not from search blocks |
-| Search results are counted as input tokens. One search measured about 10,000 input tokens (Haiku 4.5, one query) | Each search adds a large block of input, so the search cap is also an input-rate lever |
+| Search results are counted as input tokens. A request with one search used about 12,000 input tokens and a request with two used about 18,000 (Haiku 4.5, pricing queries: two measurements) | Each search adds a large block of input, so the search cap is also an input-rate lever |
 | With caching on, the API also writes a 5-minute cache entry after each web search result (per the API reference) | Later rounds of the same turn can read them at the cache-read price. The saving is not measured |
 | Cache writes cost 1.25 times the input price and count toward the input-tokens-per-minute limit; cache reads do not count toward it and cost a tenth. A prefix below the model's minimum (Haiku 4.5: 4,096 tokens, Opus 4.7: 2,048, Sonnet 4.6: 1,024) is silently not cached | Caching pays only where a prefix is read again; below the minimum it does nothing |
 | An error event inside a stream reaches the SDK as a plain `APIStatusError` whose status is 200 | Such errors can only be classified by error type, never by status |
@@ -33,8 +33,9 @@ Out of scope: a limiter shared across machines or runs, Priority Tier, the Batch
 | One retry layer: the SDK's own retries are off, `retry-after` is obeyed, backoff applies when it is absent, and total waiting is limited (15 minutes by default) | Fake-API tests for each error type |
 | Errors a retry cannot fix fail fast: spend cap, 400, 401, 402, 403, 404, 413, 422 | Exactly one request; finished steps stay on disk |
 | Every wait over 5 seconds is printed with its reason | Fake-API tests |
+| Waiting is separated from working: each step records its active time, wait time, retries by kind and the least allowance left, read from the API's rate-limit headers | Tests with fake waits and headers; changing the headers changes what is recorded, with no configuration change |
 | Every stop reason is handled, and no partial output is accepted silently | One test per stop reason |
-| Load per request is cut at the source: the search cap is sent to the API, search steps use caching, requests are streamed, and output ceilings sit above the expected output | Request-shape tests offline; a real run for the search count and for single-request completion (see limitation 15) |
+| Load per request is cut at the source: the search cap is sent to the API, search steps use caching, requests are streamed, and output ceilings sit above the expected output | Request-shape tests offline; a real run for the search count and for single-request completion (see limitation 17) |
 | The SDK version is pinned | `requirements.txt` |
 
 ## Design: persistence and resume
@@ -178,29 +179,49 @@ Caching is on only for steps that search (`research`, `feedback`), and only whil
 - The search tool is `web_search_20250305`, the basic version.
 - A continuation after `max_tokens` drops the search results from what it sends back, and keeps the model's text blocks.
 
+## Design: wait and limit telemetry
+
+Each tracked step records how long it waited, what it retried, and how much allowance the API said was left. The figures are collected by `CallStats` in `agent.py` and returned in the usage of `complete`.
+
+| Field | Meaning |
+|---|---|
+| `wait_s` | Total time the step slept between retries |
+| `active_s` | `latency_s` minus `wait_s`: the time the step spent working |
+| `rate_limited` | Retries after a 429, or after a rate-limit error inside a stream |
+| `server_errors` | Retries after a 5xx or 529, or after an overloaded or API error inside a stream |
+| `other_retries` | Retries after a connection error, a timeout, a 408 or a 409 |
+| `min_input_tokens_remaining`, `min_output_tokens_remaining` | The least input and output allowance left, in any response header of the step |
+| `input_tokens_limit`, `output_tokens_limit` | The limits those headers reported |
+
+The remaining allowance is read from the `anthropic-ratelimit-input-tokens-*` and `anthropic-ratelimit-output-tokens-*` headers of every response, including the headers of an attempt that failed. The pipeline holds no limits of its own: a different account tier shows up in the figures with no configuration change. A field is empty when the API sent no such header.
+
+The fields appear in `run-metrics.jsonl`; as Active, Wait and Retries columns, plus a rate-limit headroom table, in `run-report.md`; and as a Wait column and two footnotes (retries, lowest allowance left) in the terminal summary. A metrics file without these fields still loads.
+
 ## Constraints and limitations
 
 What this design does not guarantee, and what to do about it. Items marked "measured once" or "estimate" are not established facts.
 
-1. **A search cap narrows the research.** The feedback skill's own query plan asks for more searches than the configured cap (5 in profiles 2 and 3, 8 in profile 4), so a step ends with fewer sources than it would uncapped. The effect on quality is not measured. *What to do:* compare a run with an uncapped one; raise `max_searches` per profile in `config.yaml`, or shorten the skill's query plan.
-2. **Each search is large.** One search returned about 10,000 input tokens (measured once: Haiku 4.5, one query). Five searches is therefore roughly 50,000 input tokens or more in one step, and eight roughly 80,000 or more. A request larger than the whole input allowance of the account's tier can never pass; a limit of 30,000 input tokens per minute, for example, is below this. *What to do:* check the tier on the console's rate-limits page, and lower `max_searches` if it is low.
-3. **The pipeline does not know the account's rate-limit tier.** It reads no limits. It learns of a limit only from an error response and its `retry-after`. Whether exceeding a limit also adds a debt that lengthens the wait is not documented.
-4. **Caching covers search steps only.** Direct calls, the spec and the stories are not cached (single round), and neither is a continuation after `max_tokens`. *What to do:* nothing, unless the spec or stories start needing several rounds.
-5. **The caching saving is not measured.** The API reference says searches write cache entries after each result when caching is on, so later rounds of a turn can read them at a tenth of the input price. Whether that saves much in practice is unknown. A cache write costs 25% more than plain input and counts toward the input-per-minute limit, so with nothing re-read, caching adds cost and rate use. *What to do:* watch the cache columns and cost in `run-report.md` over a few runs.
-6. **A short prefix is not cached.** Below the model's minimum (Haiku 4.5: 4,096 tokens, Opus 4.7: 2,048, Sonnet 4.6: 1,024) caching silently does nothing: no error and no write. *What to do:* nothing; the cache columns show whether it happened.
-7. **Reported costs use out-of-date rates.** The rate table has Haiku 4.5 at $0.80 / $4 per million tokens (the API reference lists $1 / $5) and Opus 4.7 at $15 / $75 ($5 / $25), with their cache rates scaled the same way. Cache tokens are priced with the same wrong rates. Reported totals are therefore not reliable. *What to do:* check `_RATES` in `observability.py` against the pricing page before trusting totals.
-8. **Streamed usage is not confirmed against the real API.** Token counts and the search count come from the SDK's accumulation of stream events. They were checked only against a local server that imitates the stream. *What to do:* compare a real run's usage columns with the console's usage page.
-9. **A failed stream restarts from the beginning.** The partial output is discarded. Error types other than overloaded, API and rate-limit errors are raised, not retried.
-10. **The output ceilings are estimates.** They rest on estimated output sizes, not measured runs. A step that exceeds its ceiling is completed by continuation, at the price of re-sending its input. *What to do:* if a real run shows continued steps, raise that ceiling.
-11. **The metrics do not separate waiting from working.** A step's latency includes any retry wait, and the number of rounds a step took, the waits and the error counts are not recorded.
-12. **Cost estimates are rough.** `estimated_cost` in `config.yaml` and the profile table in the README do not account for the larger ceilings, the search cap or caching, and have not been measured.
-13. **The search tool is the basic version.** Dynamic filtering (`web_search_20260209` and later) needs Claude 4.6 or later and is not eligible for zero data retention. `web_search_20260318` only adds control over what appears in the response and does not reduce token use. *What to do:* judge on a real run whether filtering is worth it.
-14. **Dropping search results from a continuation is unverified.** The continuation keeps the model's text blocks, including their citations, without the search results they point to. Whether the API accepts that is not verified. With the larger ceilings continuations should be rare.
-15. **The search cap and single-request completion are checked offline only.** "Search count never exceeds the cap" and "normal documents need no continuation" can only be established by a real run. The offline tests check the shape of each request, not the API's behaviour.
-16. **No fixed pause between steps.** At a low tier a rate-limit response appears as a visible wait from the retry policy, not as a pause before the call. If one step needs more input than the tier allows in a minute, it fails (see 2).
-17. **Research and feedback never run in parallel**, whatever the account's limits would allow. This costs wall-clock time.
-18. **A failed Notion push is not retried on resume.** The push reports its own failures and does not raise, so the run records it as done. The stories are in `user-stories.md`.
-19. **Only the SDK is pinned.** The other dependencies are not pinned and there is no lockfile.
+1. **A search cap narrows the research.** The feedback skill's own query plan asks for more searches than the configured cap (5 in profiles 2 and 3, 8 in profile 4), so a step ends with fewer sources than it would uncapped. In a check with a cap of 2 and four topics requested, the model searched two, said it had reached its search limit, and answered for those two only (measured once). The effect on quality is not measured. *What to do:* compare a run with an uncapped one; raise `max_searches` per profile in `config.yaml`, or shorten the skill's query plan.
+2. **Each search is large.** A request with one search used about 12,000 input tokens and a request with two used about 18,000 (measured twice: Haiku 4.5, pricing queries), so roughly 9,000 to 12,000 per search. Five searches is therefore roughly 45,000 to 60,000 input tokens or more in one step, and eight roughly 72,000 to 96,000 or more. A request larger than the whole input allowance of the account's tier can never pass; a limit of 30,000 input tokens per minute, for example, is below this. *What to do:* check the tier on the console's rate-limits page, and lower `max_searches` if it is low.
+3. **The pipeline records the account's limits but does not act on them.** Its waits follow `retry-after` only, and it does not know the account's tier in advance. Whether exceeding a limit also adds a debt that lengthens the wait is not documented. *What to do:* check the tier on the console's rate-limits page.
+4. **Remaining allowance is an indication, not a guarantee.** The API sends the allowance when a response starts and rounds it to the nearest thousand. A long search turn can use much more afterwards, so the lowest figure recorded for a step shows the headroom at the start of its responses, not at the end.
+5. **The header figures are only partly confirmed against the real API.** They were checked against a local server that imitates it, and in one real run (Haiku 4.5) in which all four headers arrived with sensible values. Sonnet and Opus are not checked. An account may not receive every header, and the fields are then empty. *What to do:* compare a real run's headroom table with the console's rate-limit charts.
+6. **Waits in calls that are not tracked steps are not recorded.** The pre-step, compress, interview-question and quality-score calls retry and print their waits like any other call, but their waits and retries belong to no step and are not in the metrics.
+7. **Caching covers search steps only.** Direct calls, the spec and the stories are not cached (single round), and neither is a continuation after `max_tokens`. *What to do:* nothing, unless the spec or stories start needing several rounds.
+8. **The caching saving is not measured.** The API reference says searches write cache entries after each result when caching is on, so later rounds of a turn can read them at a tenth of the input price. In one real run (Haiku 4.5, a request with two searches) no cache tokens were written or read, so caching did not engage there. The prefix may have been below the 4,096-token minimum, or search results may not be cached as the reference describes. Whether caching saves anything in practice is unknown. A cache write costs 25% more than plain input and counts toward the input-per-minute limit, so with nothing re-read, caching adds cost and rate use. *What to do:* watch the cache columns and cost in `run-report.md` over a few runs.
+9. **A short prefix is not cached.** Below the model's minimum (Haiku 4.5: 4,096 tokens, Opus 4.7: 2,048, Sonnet 4.6: 1,024) caching silently does nothing: no error and no write. *What to do:* nothing; the cache columns show whether it happened.
+10. **Reported costs use out-of-date rates.** The rate table has Haiku 4.5 at $0.80 / $4 per million tokens (the API reference lists $1 / $5) and Opus 4.7 at $15 / $75 ($5 / $25), with their cache rates scaled the same way. Cache tokens are priced with the same wrong rates. Reported totals are therefore not reliable. *What to do:* check `_RATES` in `observability.py` against the pricing page before trusting totals.
+11. **Streamed usage is not confirmed against the real API.** Token counts and the search count come from the SDK's accumulation of stream events. They were checked only against a local server that imitates the stream. *What to do:* compare a real run's usage columns with the console's usage page.
+12. **A failed stream restarts from the beginning.** The partial output is discarded. Error types other than overloaded, API and rate-limit errors are raised, not retried.
+13. **The output ceilings are estimates.** They rest on estimated output sizes, not measured runs. A step that exceeds its ceiling is completed by continuation, at the price of re-sending its input, and the metrics do not record how many rounds a step took. *What to do:* if a real run shows continued steps, raise that ceiling.
+14. **Cost estimates are rough.** `estimated_cost` in `config.yaml` and the profile table in the README do not account for the larger ceilings, the search cap or caching, and have not been measured.
+15. **The search tool is the basic version.** Dynamic filtering (`web_search_20260209` and later) needs Claude 4.6 or later and is not eligible for zero data retention. `web_search_20260318` only adds control over what appears in the response and does not reduce token use. *What to do:* judge on a real run whether filtering is worth it.
+16. **Dropping search results from a continuation is unverified.** The continuation keeps the model's text blocks, including their citations, without the search results they point to. Whether the API accepts that is not verified. With the larger ceilings continuations should be rare.
+17. **The search cap and single-request completion are checked offline only.** "Search count never exceeds the cap" and "normal documents need no continuation" can only be established by a real run. The offline tests check the shape of each request, not the API's behaviour.
+18. **No fixed pause between steps.** At a low tier a rate-limit response appears as a visible wait from the retry policy, not as a pause before the call. If one step needs more input than the tier allows in a minute, it fails (see 2).
+19. **Research and feedback never run in parallel**, whatever the account's limits would allow. This costs wall-clock time.
+20. **A failed Notion push is not retried on resume.** The push reports its own failures and does not raise, so the run records it as done. The stories are in `user-stories.md`.
+21. **Only the SDK is pinned.** The other dependencies are not pinned and there is no lockfile.
 
 ## Decisions
 
@@ -230,3 +251,4 @@ What this design does not guarantee, and what to do about it. Items marked "meas
 | `tests/test_resume.py` | Failing the pipeline at each step, then resuming: finished steps are not called again, the human gate is not asked twice, the final outputs are complete, no fixed pause between steps |
 | `tests/test_stop_reasons.py` | One test per stop reason for `complete`, and `run_skill` and `_llm` going through it |
 | `tests/test_request_load.py` | The search cap, caching scope, streaming restart, search count source and the ceilings in `config.yaml` |
+| `tests/test_telemetry.py` | Waits and retries by kind, rate-limit headers (including failed attempts and a different tier), active time, and how the fields appear in the jsonl, report and terminal summary |

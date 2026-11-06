@@ -83,33 +83,36 @@ _VISIBLE_WAIT_S = 5
 
 
 # An error event inside a stream arrives after the HTTP status (200) was sent, so the status
-# cannot tell a transient failure from a permanent one; the error type can.
-_STREAM_ERROR_REASONS = {
-    "overloaded_error": "API overloaded",
-    "api_error": "API error",
-    "rate_limit_error": "Rate limited",
+# cannot tell a transient failure from a permanent one; the error type can. Each type maps to
+# the reason shown to the user and to the CallStats counter the retry is counted in.
+_STREAM_ERRORS = {
+    "overloaded_error": ("API overloaded", "server_errors"),
+    "api_error": ("API error", "server_errors"),
+    "rate_limit_error": ("Rate limited", "rate_limited"),
 }
 
 
-def _retry_reason(e: Exception) -> str | None:
-    """Why this error is worth retrying, or None when retrying cannot help."""
+def _retry_reason(e: Exception) -> tuple[str, str] | None:
+    """(reason shown, CallStats counter) when the error is worth retrying, else None."""
     if isinstance(e, anthropic.APIConnectionError):
-        return "Connection error"
+        return "Connection error", "other_retries"
     if not isinstance(e, anthropic.APIStatusError):
         return None
     if getattr(e, "error_code", None) == _SPEND_CAP_CODE:
         return None
     if e.status_code < 300:
-        reason = _STREAM_ERROR_REASONS.get(getattr(e, "type", None))
-        return f"{reason} (mid-stream)" if reason else None
+        reason, counter = _STREAM_ERRORS.get(getattr(e, "type", None), (None, None))
+        return (f"{reason} (mid-stream)", counter) if reason else None
     if e.status_code in _PERMANENT_STATUSES:
         return None
     if e.status_code == 429:
-        return "Rate limited (429)"
+        return "Rate limited (429)", "rate_limited"
     if e.status_code == 529:
-        return "API overloaded (529)"
-    if e.status_code in _RETRYABLE_STATUSES or e.status_code >= 500:
-        return f"API error ({e.status_code})"
+        return "API overloaded (529)", "server_errors"
+    if e.status_code >= 500:
+        return f"API error ({e.status_code})", "server_errors"
+    if e.status_code in _RETRYABLE_STATUSES:
+        return f"API error ({e.status_code})", "other_retries"
     return None
 
 
@@ -134,13 +137,80 @@ def _backoff_s(retry: int) -> float:
     return delay / 2 + random.uniform(0, delay / 2)
 
 
-def api_call_with_retry(fn, max_retries: int = 8, max_total_wait: float = 15 * 60):
+def _header_int(headers, name: str) -> int | None:
+    value = headers.get(name)
+    if isinstance(value, (str, int)):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _lowest(current: int | None, new: int) -> int:
+    return new if current is None else min(current, new)
+
+
+class CallStats:
+    """What one call waited for, and the allowance the API reported while it ran.
+
+    api_call_with_retry fills in the waits and retries, _request the rate-limit headers, and
+    complete() returns them in its usage. The remaining allowances are the headers' values:
+    the API sends them when a response starts and rounds them to the nearest thousand.
+    """
+
+    def __init__(self) -> None:
+        self.wait_s = 0.0
+        self.rate_limited = 0
+        self.server_errors = 0
+        self.other_retries = 0
+        self.min_input_tokens_remaining: int | None = None
+        self.input_tokens_limit: int | None = None
+        self.min_output_tokens_remaining: int | None = None
+        self.output_tokens_limit: int | None = None
+
+    def note_retry(self, counter: str, wait: float) -> None:
+        setattr(self, counter, getattr(self, counter) + 1)
+        self.wait_s += wait
+
+    def note_headers(self, headers) -> None:
+        """Record the rate-limit headers of a response, or of a failed attempt."""
+        if not headers:
+            return
+        input_left = _header_int(headers, "anthropic-ratelimit-input-tokens-remaining")
+        input_limit = _header_int(headers, "anthropic-ratelimit-input-tokens-limit")
+        output_left = _header_int(headers, "anthropic-ratelimit-output-tokens-remaining")
+        output_limit = _header_int(headers, "anthropic-ratelimit-output-tokens-limit")
+        if input_left is not None:
+            self.min_input_tokens_remaining = _lowest(self.min_input_tokens_remaining, input_left)
+        if input_limit is not None:
+            self.input_tokens_limit = input_limit
+        if output_left is not None:
+            self.min_output_tokens_remaining = _lowest(self.min_output_tokens_remaining, output_left)
+        if output_limit is not None:
+            self.output_tokens_limit = output_limit
+
+    def as_usage(self) -> dict:
+        return {
+            "wait_s": self.wait_s,
+            "rate_limited": self.rate_limited,
+            "server_errors": self.server_errors,
+            "other_retries": self.other_retries,
+            "min_input_tokens_remaining": self.min_input_tokens_remaining,
+            "input_tokens_limit": self.input_tokens_limit,
+            "min_output_tokens_remaining": self.min_output_tokens_remaining,
+            "output_tokens_limit": self.output_tokens_limit,
+        }
+
+
+def api_call_with_retry(fn, max_retries: int = 8, max_total_wait: float = 15 * 60, stats: CallStats | None = None):
     """Call fn(), retrying transient API errors. The only retry layer in the pipeline.
 
     Waits as long as the API's retry-after says, or backs off exponentially when it
     sends none. Errors a retry cannot fix (_retry_reason) are raised on the first
     attempt. So is any error whose wait would not fit in max_total_wait, so a call
-    never sleeps silently or for longer than that budget.
+    never sleeps silently or for longer than that budget. When given stats, it counts
+    each retry and its wait there, and records the rate-limit headers of failed attempts.
     """
     waited = 0.0
     retry = 0
@@ -148,9 +218,12 @@ def api_call_with_retry(fn, max_retries: int = 8, max_total_wait: float = 15 * 6
         try:
             return fn()
         except (anthropic.APIStatusError, anthropic.APIConnectionError) as e:
-            reason = _retry_reason(e)
-            if reason is None:
+            if stats is not None:
+                stats.note_headers(getattr(getattr(e, "response", None), "headers", None))
+            found = _retry_reason(e)
+            if found is None:
                 raise
+            reason, counter = found
             retry += 1
             if retry > max_retries:
                 print(f"\n  {reason} — giving up after {max_retries} retries.")
@@ -170,6 +243,8 @@ def api_call_with_retry(fn, max_retries: int = 8, max_total_wait: float = 15 * 6
                 )
             time.sleep(wait)
             waited += wait
+            if stats is not None:
+                stats.note_retry(counter, wait)
 
 
 class StopReasonError(RuntimeError):
@@ -194,8 +269,8 @@ def _refusal_detail(response) -> str:
     return "the model declined to answer" + (f" ({'; '.join(parts)})" if parts else "")
 
 
-def _request(kwargs: dict):
-    """One streamed request, returned as the complete Message.
+def _request(kwargs: dict, stats: CallStats | None = None):
+    """One streamed request, returned as the complete Message. Its rate-limit headers go to stats.
 
     Streaming lifts the SDK's size guard on non-streaming requests (which the larger
     max_tokens ceilings would hit) and avoids idle-connection timeouts on long search
@@ -203,6 +278,8 @@ def _request(kwargs: dict):
     caller then restarts the whole request: the partial output is discarded.
     """
     with client.messages.stream(**kwargs) as stream:
+        if stats is not None:
+            stats.note_headers(getattr(getattr(stream, "response", None), "headers", None))
         return stream.get_final_message()
 
 
@@ -229,6 +306,7 @@ def complete(
     step: str = "",
 ) -> tuple[str, dict]:
     """Run one request to a complete answer. Returns (text, usage), usage summed across rounds.
+    The usage also carries the call's waits, retries and rate-limit headroom (see CallStats).
 
     Every stop reason is handled, so a partial answer is never returned silently:
       end_turn    done
@@ -249,6 +327,7 @@ def complete(
     total_output_tokens = 0
     total_cache_write_tokens = 0
     total_cache_read_tokens = 0
+    stats = CallStats()
     use_tools = bool(tools)
 
     for _ in range(_MAX_ROUNDS):
@@ -260,7 +339,7 @@ def complete(
             if cache:
                 kwargs["cache_control"] = {"type": "ephemeral"}
 
-        response = api_call_with_retry(lambda: _request(kwargs))
+        response = api_call_with_retry(lambda: _request(kwargs, stats), stats=stats)
 
         total_input_tokens += response.usage.input_tokens
         total_output_tokens += response.usage.output_tokens
@@ -305,6 +384,7 @@ def complete(
         "cache_write_tokens": total_cache_write_tokens,
         "cache_read_tokens": total_cache_read_tokens,
         "search_count": search_count,
+        **stats.as_usage(),
     }
     return text, usage
 

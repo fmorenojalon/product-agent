@@ -25,7 +25,9 @@ def test_end_turn_returns_the_text_and_usage(api):
     api.responses = [_response("end_turn", _text("done"), usage=_usage(10, 5, 3, 7))]
     text, usage = call()
     assert text == "done"
-    assert usage == {
+    assert {key: usage[key] for key in (
+        "input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens", "search_count",
+    )} == {
         "input_tokens": 10, "output_tokens": 5,
         "cache_write_tokens": 3, "cache_read_tokens": 7, "search_count": 0,
     }

@@ -7,8 +7,8 @@
 #                 does not is continued (and each continuation re-sends the input).
 #                 Profile 1 keeps small ceilings on purpose, to keep test runs cheap.
 #   max_searches  The most web searches the step may run. Sent to the API as max_uses, which
-#                 enforces it; 0 turns search off. Each search adds roughly 10,000 input tokens
-#                 (one measurement), so a lower number is cheaper and faster but narrows the
+#                 enforces it; 0 turns search off. Each search adds roughly 9,000 to 12,000 input tokens
+#                 (two measurements), so a lower number is cheaper and faster but narrows the
 #                 research. At a low rate-limit tier, keep it small enough that the whole step
 #                 fits in one minute of input allowance.
 #

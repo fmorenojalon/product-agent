@@ -20,7 +20,7 @@ from connectors.discord import fetch_feedback
 from connectors.notion import push_stories
 from observability import (
     RunTracker, StepMetrics, QualityResult,
-    estimate_cost, check_quality, prompt_quality_failure,
+    estimate_cost, check_quality, prompt_quality_failure, telemetry_from_usage,
 )
 from run_state import RunState, write_text_atomic
 
@@ -358,6 +358,7 @@ def _track_step(
         cache_write_tokens=usage.get("cache_write_tokens", 0),
         cache_read_tokens=usage.get("cache_read_tokens", 0),
         search_count=usage.get("search_count", 0),
+        **telemetry_from_usage(usage),
     ))
     if declined:
         if reject_dir is not None:
