@@ -97,13 +97,13 @@ Which direction do you want to pursue? (enter a number or describe your choice):
   ──────────────────────────────────────────────────────────────────────────────────────
   Step         Model      In tok  Out tok  Srch      Cost  Latency    Wait  Quality
   ──────────────────────────────────────────────────────────────────────────────────────
-  research     sonnet      4,821    3,102     4  $ 0.0612    18.3s       -  ✓
-  feedback     sonnet      3,944    2,871     3  $ 0.0532    15.1s    8.2s  ✓
-  synthesis    haiku       1,203      412     -  $ 0.0026     3.1s       -  ✓
-  spec         sonnet      6,203    5,441     -  $ 0.0558    22.7s       -  ✓
-  stories      sonnet      7,102    4,983     -  $ 0.0593    26.2s       -  ✓
+  research     sonnet      4,821    3,102     4  $ 0.1409    18.3s       -  ✓
+  feedback     sonnet      3,944    2,871     3  $ 0.0849    15.1s    8.2s  ✓
+  synthesis    haiku       1,203      412     -  $ 0.0033     3.1s       -  ✓
+  spec         sonnet      6,203    5,441     -  $ 0.1002    22.7s       -  ✓
+  stories      sonnet      7,102    4,983     -  $ 0.0961    26.2s       -  ✓
   ──────────────────────────────────────────────────────────────────────────────────────
-  TOTAL                   23,273   16,809     7  $ 0.2321    85.4s    8.2s
+  TOTAL                   23,273   16,809     7  $ 0.4253    85.4s    8.2s
   ──────────────────────────────────────────────────────────────────────────────────────
   * cost includes cache write (9,813 tok) + cache read (10,225 tok) + 7 search(es)
   * 1 retry, 8s waiting: 1 rate-limited, 0 server errors, 0 other
@@ -190,7 +190,7 @@ Each profile configures per-step `model`, `max_tokens`, and `max_searches`. To c
 - **`max_searches` is a hard cap.** It is sent to the API, which stops searching at that number. Each search adds roughly 9,000 to 12,000 input tokens (measured twice), so a lower number is cheaper and faster but narrows the research. At a low rate-limit tier, a step's searches must fit within one minute of input allowance, or the step can never pass.
 - **`max_tokens` is a ceiling, not a budget.** It is billed only when used and does not count toward the output rate limit. Profiles 2–4 set it above the expected output, so a step normally finishes in one request; profile 1 keeps small ceilings on purpose.
 - **Steps that search use prompt caching.** The other steps do not: they make a single request, so caching would only add its write premium. How much caching saves has not been measured.
-- **Costs shown are rough.** The estimates above have not been measured with these settings, and the cost table in the run summary uses out-of-date rates for Haiku 4.5 and Opus 4.7, so its totals are not reliable.
+- **Costs shown are estimates.** The profile estimates above have not been measured with these settings. The run summary computes cost from the per-model rates in `observability.py` (input, output, cache and web search), which are fixed constants dated by `RATES_UPDATED` and need an edit when prices change.
 
 All known limits are listed in [specs/rate-management.md](specs/rate-management.md#constraints-and-limitations).
 

@@ -1,6 +1,7 @@
 """Gate 1 + Gate 3 unit tests for observability.py."""
 
 import json
+import re
 import sys
 import pytest
 from io import StringIO
@@ -23,7 +24,7 @@ from observability import (
 
 def test_estimate_cost_haiku():
     cost = estimate_cost("claude-haiku-4-5-20251001", 1_000_000, 1_000_000)
-    assert abs(cost - (0.80 + 4.00)) < 1e-9
+    assert abs(cost - (1.00 + 5.00)) < 1e-9
 
 
 def test_estimate_cost_sonnet():
@@ -33,7 +34,37 @@ def test_estimate_cost_sonnet():
 
 def test_estimate_cost_opus():
     cost = estimate_cost("claude-opus-4-7", 1_000_000, 1_000_000)
-    assert abs(cost - (15.00 + 75.00)) < 1e-9
+    assert abs(cost - (5.00 + 25.00)) < 1e-9
+
+
+@pytest.mark.parametrize("model", ["claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-7"])
+def test_cache_and_search_charges_follow_the_input_price(model):
+    """A 5-minute cache write costs 1.25 times the input price, a read 0.1 times, a search $0.01."""
+    base = estimate_cost(model, 1_000_000, 0)
+    assert estimate_cost(model, 0, 0, cache_write_tokens=1_000_000) == pytest.approx(base * 1.25)
+    assert estimate_cost(model, 0, 0, cache_read_tokens=1_000_000) == pytest.approx(base * 0.10)
+    assert estimate_cost(model, 0, 0, search_count=1_000) == pytest.approx(10.00)
+
+
+def test_published_rates_of_each_model():
+    """Per million tokens: input, output, 5-minute cache write, cache read."""
+    published = {
+        "claude-haiku-4-5-20251001": (1.00, 5.00, 1.25, 0.10),
+        "claude-sonnet-4-6": (3.00, 15.00, 3.75, 0.30),
+        "claude-opus-4-7": (5.00, 25.00, 6.25, 0.50),
+    }
+    for model, (input_rate, output_rate, write_rate, read_rate) in published.items():
+        cost = estimate_cost(model, 1_000_000, 1_000_000, 1_000_000, 1_000_000)
+        assert cost == pytest.approx(input_rate + output_rate + write_rate + read_rate), model
+
+
+def test_every_model_named_in_config_has_a_rate():
+    """A model without a rate raises after its call is paid for, so config.yaml may only name rated models."""
+    config = (Path(__file__).parent.parent / "config.yaml").read_text()
+    models = set(re.findall(r"claude-[a-z0-9.-]+", config))
+    assert models, "no models found in config.yaml"
+    for model in models:
+        estimate_cost(model, 1, 1)  # raises ValueError for an unrated model
 
 
 def test_estimate_cost_unknown_model():

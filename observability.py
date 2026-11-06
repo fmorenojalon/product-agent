@@ -16,11 +16,11 @@ from agent import api_call_with_retry
 # cache_write: tokens newly written to prompt cache (billed at ~25% premium over input)
 # cache_read:  tokens read from prompt cache (billed at ~10% of input rate)
 # All per-million-token rates except _SEARCH_RATE which is per-1k-queries.
-RATES_UPDATED = "2026-05-22"
+RATES_UPDATED = "2026-11-06"
 _RATES: dict[str, dict[str, float]] = {
-    "claude-haiku-4-5-20251001": {"input": 0.80,  "output": 4.00,  "cache_write": 1.00,  "cache_read": 0.08},
+    "claude-haiku-4-5-20251001": {"input": 1.00,  "output": 5.00,  "cache_write": 1.25,  "cache_read": 0.10},
     "claude-sonnet-4-6":         {"input": 3.00,  "output": 15.00, "cache_write": 3.75,  "cache_read": 0.30},
-    "claude-opus-4-7":           {"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_read": 1.50},
+    "claude-opus-4-7":           {"input": 5.00,  "output": 25.00, "cache_write": 6.25,  "cache_read": 0.50},
 }
 _SEARCH_RATE = 10.00  # USD per 1,000 web searches
 _SHORT: dict[str, str] = {

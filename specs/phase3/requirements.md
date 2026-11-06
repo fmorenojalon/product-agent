@@ -148,9 +148,9 @@ cost = (input_tokens        / 1_000_000) * input_rate
 
 | Model | Input $/M | Output $/M | Cache write $/M | Cache read $/M |
 |-------|----------:|----------:|----------------:|---------------:|
-| claude-haiku-4-5-20251001 | $0.80 | $4.00 | $1.00 | $0.08 |
+| claude-haiku-4-5-20251001 | $1.00 | $5.00 | $1.25 | $0.10 |
 | claude-sonnet-4-6 | $3.00 | $15.00 | $3.75 | $0.30 |
-| claude-opus-4-7 | $15.00 | $75.00 | $18.75 | $1.50 |
+| claude-opus-4-7 | $5.00 | $25.00 | $6.25 | $0.50 |
 
 Web search: **$10.00 per 1,000 queries** (`_SEARCH_RATE`).
 
