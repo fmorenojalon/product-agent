@@ -1,3 +1,20 @@
+# Per-step settings in each profile:
+#
+#   model         Claude model used for the step.
+#   max_tokens    Ceiling on one response. You pay only for tokens actually produced, and it does
+#                 not count toward the output-tokens-per-minute limit, so set it above the
+#                 expected output: a step that fits finishes in one request, while one that
+#                 does not is continued (and each continuation re-sends the input).
+#                 Profile 1 keeps small ceilings on purpose, to keep test runs cheap.
+#   max_searches  The most web searches the step may run. Sent to the API as max_uses, which
+#                 enforces it; 0 turns search off. Each search adds roughly 10,000 input tokens
+#                 (one measurement), so a lower number is cheaper and faster but narrows the
+#                 research. At a low rate-limit tier, keep it small enough that the whole step
+#                 fits in one minute of input allowance.
+#
+# estimated_cost figures are rough: they do not account for the larger max_tokens ceilings
+# or for prompt caching, and have not been measured.
+
 profiles:
 
   "1":
@@ -20,13 +37,13 @@ profiles:
     estimated_cost: "$0.30–0.60"
     brief_mode: false
     steps:
-      pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 512,  max_searches: 0 }
-      compress:  { model: claude-haiku-4-5-20251001, max_tokens: 800,  max_searches: 0 }
-      research:  { model: claude-haiku-4-5-20251001, max_tokens: 4000, max_searches: 5 }
-      feedback:  { model: claude-haiku-4-5-20251001, max_tokens: 4000, max_searches: 5 }
-      synthesis: { model: claude-haiku-4-5-20251001, max_tokens: 1500, max_searches: 0 }
-      spec:      { model: claude-haiku-4-5-20251001, max_tokens: 6000, max_searches: 0 }
-      stories:   { model: claude-haiku-4-5-20251001, max_tokens: 6000, max_searches: 0 }
+      pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 512,   max_searches: 0 }
+      compress:  { model: claude-haiku-4-5-20251001, max_tokens: 1500,  max_searches: 0 }
+      research:  { model: claude-haiku-4-5-20251001, max_tokens: 16000, max_searches: 5 }
+      feedback:  { model: claude-haiku-4-5-20251001, max_tokens: 16000, max_searches: 5 }
+      synthesis: { model: claude-haiku-4-5-20251001, max_tokens: 3000,  max_searches: 0 }
+      spec:      { model: claude-haiku-4-5-20251001, max_tokens: 16000, max_searches: 0 }
+      stories:   { model: claude-haiku-4-5-20251001, max_tokens: 32000, max_searches: 0 }
 
   "3":
     name: "Balanced — Sonnet for quality steps"
@@ -34,13 +51,13 @@ profiles:
     estimated_cost: "$2.00–3.00"
     brief_mode: false
     steps:
-      pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 512,  max_searches: 0 }
-      compress:  { model: claude-haiku-4-5-20251001, max_tokens: 800,  max_searches: 0 }
-      research:  { model: claude-sonnet-4-6,          max_tokens: 6000, max_searches: 5 }
-      feedback:  { model: claude-sonnet-4-6,          max_tokens: 6000, max_searches: 5 }
-      synthesis: { model: claude-haiku-4-5-20251001, max_tokens: 1500, max_searches: 0 }
-      spec:      { model: claude-sonnet-4-6,          max_tokens: 8000, max_searches: 0 }
-      stories:   { model: claude-sonnet-4-6,          max_tokens: 6000, max_searches: 0 }
+      pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 512,   max_searches: 0 }
+      compress:  { model: claude-haiku-4-5-20251001, max_tokens: 1500,  max_searches: 0 }
+      research:  { model: claude-sonnet-4-6,          max_tokens: 16000, max_searches: 5 }
+      feedback:  { model: claude-sonnet-4-6,          max_tokens: 16000, max_searches: 5 }
+      synthesis: { model: claude-haiku-4-5-20251001, max_tokens: 3000,  max_searches: 0 }
+      spec:      { model: claude-sonnet-4-6,          max_tokens: 16000, max_searches: 0 }
+      stories:   { model: claude-sonnet-4-6,          max_tokens: 32000, max_searches: 0 }
 
   "4":
     name: "Optimal — Opus for research, Sonnet elsewhere"
@@ -48,13 +65,13 @@ profiles:
     estimated_cost: "$4.00–7.00"
     brief_mode: false
     steps:
-      pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 512,  max_searches: 0 }
-      compress:  { model: claude-haiku-4-5-20251001, max_tokens: 800,  max_searches: 0 }
-      research:  { model: claude-opus-4-7,            max_tokens: 8000, max_searches: 8 }
-      feedback:  { model: claude-opus-4-7,            max_tokens: 8000, max_searches: 8 }
-      synthesis: { model: claude-sonnet-4-6,          max_tokens: 2000, max_searches: 0 }
-      spec:      { model: claude-sonnet-4-6,          max_tokens: 8000, max_searches: 0 }
-      stories:   { model: claude-sonnet-4-6,          max_tokens: 6000, max_searches: 0 }
+      pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 512,   max_searches: 0 }
+      compress:  { model: claude-haiku-4-5-20251001, max_tokens: 1500,  max_searches: 0 }
+      research:  { model: claude-opus-4-7,            max_tokens: 16000, max_searches: 8 }
+      feedback:  { model: claude-opus-4-7,            max_tokens: 16000, max_searches: 8 }
+      synthesis: { model: claude-sonnet-4-6,          max_tokens: 3000,  max_searches: 0 }
+      spec:      { model: claude-sonnet-4-6,          max_tokens: 16000, max_searches: 0 }
+      stories:   { model: claude-sonnet-4-6,          max_tokens: 32000, max_searches: 0 }
 
 # Phase 2: Discord connector
 discord:

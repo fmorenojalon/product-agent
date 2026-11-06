@@ -88,3 +88,30 @@ observability.py      # cost estimation, heuristic + LLM quality checks, RunTrac
 tests/
   test_observability.py
 ```
+
+---
+
+## Phase 4 — Rate Management and Run Resilience
+
+**Goal:** No API fault loses finished work, and no wait is silent or unbounded. Full requirements and design: [rate-management.md](rate-management.md).
+
+**Scope:**
+- **Per-step saving and resume:** every step's output is written as it finishes; `python orchestrator.py --resume <run folder>` skips finished steps.
+- **Single retry policy:** one wrapper owns retrying, SDK retries are disabled, `retry-after` is obeyed, permanent errors fail fast, total waiting is bounded and visible.
+- **Pinned SDK version.**
+- **Stop-reason handling:** one loop runs skills and direct calls; it resumes paused search turns, continues past `max_tokens`, and raises on anything else instead of saving a partial output.
+- **Request load:** the search cap is sent to the API as `max_uses`, steps that search use prompt caching, every request is streamed, and `max_tokens` ceilings are set above the expected output. There is no fixed pause between phases. The constraints that come with this are listed in rate-management.md.
+
+**Exit criteria:** Killing a run at any step and resuming repeats no finished step; a permanent API error makes exactly one request; every wait over 5 seconds is printed with its reason; a paused search turn is resumed and a refusal stops the run instead of saving a partial output; the search cap is enforced by the API and no fixed pause separates steps.
+
+**Files introduced in Phase 4:**
+```
+run_state.py                # RunState: step completion and values saved in run-state.json
+specs/rate-management.md
+tests/
+  test_run_state.py
+  test_resume.py
+  test_stop_reasons.py
+  test_request_load.py
+  fakes.py
+```

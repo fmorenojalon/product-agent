@@ -129,7 +129,7 @@ def heuristic_check(step: str, output: str) -> tuple[bool, str]:
 
 def llm_quality_score(step: str, output: str, profile: dict) -> tuple[int, str]:
     """Haiku call that rates output 1–5. Called only when profile key is in _LLM_SCORE_PROFILES."""
-    client = Anthropic()
+    client = Anthropic(max_retries=0)  # retries are owned by api_call_with_retry
     prompt = (
         f"Rate the quality of this {step} output on a 1–5 scale "
         "(1=broken/empty, 2=severely degraded, 3=acceptable, 4=good, 5=excellent).\n"
@@ -198,6 +198,31 @@ class RunTracker:
         self.title = title
         self.timestamp = timestamp
         self._steps: list[StepMetrics] = []
+
+    @classmethod
+    def load(cls, folder: Path, title: str, timestamp: str) -> RunTracker:
+        """Rebuild a tracker from a run folder's run-metrics.jsonl (empty when the folder has no metrics file)."""
+        tracker = cls(title, timestamp)
+        path = folder / "run-metrics.jsonl"
+        if not path.exists():
+            return tracker
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            d = json.loads(line)
+            tracker.record(StepMetrics(
+                step=d["step"],
+                model=d["model"],
+                input_tokens=d["input_tokens"],
+                output_tokens=d["output_tokens"],
+                latency_s=d["latency_s"],
+                cost_usd=d["cost_usd"],
+                quality=QualityResult(**d["quality"]),
+                cache_write_tokens=d.get("cache_write_tokens", 0),
+                cache_read_tokens=d.get("cache_read_tokens", 0),
+                search_count=d.get("search_count", 0),
+            ))
+        return tracker
 
     def record(self, metrics: StepMetrics) -> None:
         self._steps.append(metrics)

@@ -19,7 +19,7 @@ Product decisions require synthesizing fragmented inputs — market research, us
 The pipeline has two distinct phases separated by a human decision gate:
 
 **Pre-step:** A fast Claude call extracts competitor names and a target persona from the raw idea, so downstream skills receive precise inputs.  
-**Phase A — Research (parallel):** Both research agents run simultaneously.  
+**Phase A — Research (sequential):** The research agents run one after the other, to stay within API rate limits.  
 **Human gate:** The orchestrator synthesizes the research into 2–3 product direction proposals; the user confirms one.  
 **Phase B — Specification (sequential):** Spec drafting runs first, then user story generation uses its output.
 
@@ -28,8 +28,8 @@ User prompt (idea / hypothesis)
     │
     ├─► [Pre-step] Extract competitors + persona  (Claude API call, ~2s)
     │
-    ├─► UC-1: Competitive research       (product-analysis)        ┐ run in
-    └─► UC-2: User feedback synthesis    (product-user-feedback)   ┘ parallel
+    ├─► UC-1: Competitive research       (product-analysis)        ┐ run one
+    └─► UC-2: User feedback synthesis    (product-user-feedback)   ┘ after the other
                     │
             [Orchestrator synthesizes both outputs]
                     │
@@ -64,7 +64,7 @@ The agent produces a structured research brief covering the competitive landscap
 - Output: research brief (markdown)
 - Agent: `product-analysis` skill (SKILL.md as system prompt via Claude API)
 - Tools: Anthropic hosted web search
-- Runs in parallel with UC-2
+- Runs before UC-2
 
 ### UC-2: User Feedback Synthesis
 The agent researches publicly available user feedback on comparable products and distills it into key themes, sentiment signals, and quoted evidence relevant to the idea.
@@ -73,7 +73,7 @@ The agent researches publicly available user feedback on comparable products and
 - Output: feedback synthesis report (markdown)
 - Agent: `product-user-feedback` skill (SKILL.md as system prompt via Claude API)
 - Tools: Anthropic hosted web search
-- Runs in parallel with UC-1
+- Runs after UC-1
 - **New work — Discord connector:** Implemented in Phase 2. Phase 1 uses a mock connector returning fixture data.
 
 ### Synthesis & Proposal Generation (Orchestrator step)
@@ -118,15 +118,17 @@ The agent breaks the product spec into structured epics and user stories.
 | Discord connector script | New | Phase 2 |
 | Notion connector script | New | Phase 2 |
 | Observability layer (latency, cost, handoff metrics) | New | Phase 3 |
+| Rate management and run resilience (per-step saving, resume, single retry policy) | New | Phase 4 |
 
 ## Success Criteria
 
 | Metric | Target |
 |---|---|
-| UC-1 and UC-2 run in parallel from a single prompt | Phase 1 |
+| UC-1 and UC-2 run one after the other from a single prompt | Phase 1 |
 | Orchestrator presents 2–3 grounded proposals after research | Phase 1 |
 | Spec and user stories generated after user confirms a direction | Phase 1 |
 | All outputs saved as markdown files in a timestamped output/ folder | Phase 1 |
 | User stories appear in Notion after a single end-to-end run | Phase 2 |
 | Discord feedback included in UC-2 synthesis | Phase 2 |
 | Per-task cost and latency tracked and attributable per agent | Phase 3 |
+| An API fault never loses finished steps; an interrupted run resumes without repeating them | Phase 4 |

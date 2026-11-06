@@ -34,6 +34,13 @@ def _response(stop_reason: str, blocks: list):
     return r
 
 
+def _stream_of(response):
+    """What client.messages.stream(...) returns: a context manager whose get_final_message() is response."""
+    stream = MagicMock()
+    stream.__enter__.return_value.get_final_message.return_value = response
+    return stream
+
+
 class TestSearchCountFix(unittest.TestCase):
 
     def _run_single_response(self, blocks, stop_reason="end_turn"):
@@ -97,7 +104,7 @@ class TestSearchBlobStripping(unittest.TestCase):
 
         with patch("agent.client") as mock_client, \
              patch("builtins.open", return_value=MagicMock(read=lambda: "# skill")):
-            mock_client.messages.create.side_effect = fake_create
+            mock_client.messages.stream.side_effect = lambda **kwargs: _stream_of(fake_create(**kwargs))
             run_skill("dummy", "msg", profile={"brief_mode": False, "steps": {}}, step="research")
 
         # Verify two API calls were made (first + continuation)

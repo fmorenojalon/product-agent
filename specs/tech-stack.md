@@ -11,8 +11,8 @@
 ```
 orchestrator.py
   ├── pre-step: competitor + persona extraction  (plain Claude call)
-  ├── calls product-analysis/      (UC-1 — parallel)
-  ├── calls product-user-feedback/ (UC-2 — parallel)
+  ├── calls product-analysis/      (UC-1)
+  ├── calls product-user-feedback/ (UC-2 — after UC-1)
   ├── synthesis + proposal generation           (plain Claude call)
   ├── [human gate]
   ├── calls product-specification/ (UC-3 — context-injection mode)
@@ -69,7 +69,7 @@ output/
 ## Language & Runtime
 
 - **Python 3.11+**
-- `anthropic` — Claude API SDK (includes hosted web search)
+- `anthropic` — Claude API SDK (includes hosted web search); pinned in `requirements.txt` because retry behaviour differs between SDK versions
 - `python-dotenv` — secrets management (`.env`, never committed)
 
 ## Configuration
@@ -85,3 +85,11 @@ Built into the orchestrator — no third-party APM required for the PoC:
 - **Cost attribution:** token counts from each Claude API response, mapped to agent name + task ID, converted to estimated USD
 - **Handoff quality:** structured output validated at each handoff; degraded outputs surface warnings
 - Metrics written to `output/<run>/run-metrics.jsonl`; summary printed at pipeline end
+
+## Rate management and resilience (Phase 4)
+
+Specified in [rate-management.md](rate-management.md):
+
+- **Retries:** one wrapper (`api_call_with_retry` in `agent.py`) owns all retrying; SDK retries are disabled. It obeys `retry-after`, backs off otherwise, fails fast on errors a retry cannot fix, and limits total waiting.
+- **Persistence:** each step is saved as it finishes, with a `run-state.json` for what the output files do not hold; `python orchestrator.py --resume <run folder>` continues a stopped run.
+- **Request load:** every request is streamed. Searching steps send `max_uses` (the per-step `max_searches`) and use automatic prompt caching; `max_tokens` is a ceiling set above the expected output. See the constraints and limitations in [rate-management.md](rate-management.md).

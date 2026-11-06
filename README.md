@@ -112,8 +112,8 @@ Which direction do you want to pursue? (enter a number or describe your choice):
   Profile       : Balanced — Sonnet for quality steps
   Output folder : output/2026-05-19_idea/
   Files         : research-brief.md · feedback-synthesis.md
-                  product-spec.md · user-stories.md
-                  run-report.md · run-metrics.jsonl
+                  proposals.md · product-spec.md · user-stories.md
+                  run-report.md · run-metrics.jsonl · run-state.json
 ──────────────────────────────────────────────────────────────────────
 ```
 
@@ -126,11 +126,29 @@ output/
 └── 2026-05-19_idea/
     ├── research-brief.md        # UC-1 competitive research
     ├── feedback-synthesis.md    # UC-2 user feedback report
+    ├── proposals.md             # the product directions you chose between
     ├── product-spec.md          # UC-3 product specification
     ├── user-stories.md          # UC-4 user stories
     ├── run-report.md            # per-step cost/latency/quality table
-    └── run-metrics.jsonl        # machine-readable metrics (one JSON object per step)
+    ├── run-metrics.jsonl        # machine-readable metrics (one JSON object per step)
+    └── run-state.json           # what --resume needs (choices, finished steps)
 ```
+
+Files are written as each step finishes, so a run that stops part-way keeps everything it completed.
+
+### Resuming a stopped run
+
+If a run stops — an API error that retrying cannot fix, a quality check you declined, or Ctrl-C — the pipeline prints the exact command to continue:
+
+```bash
+python orchestrator.py --resume output/2026-05-19_14-03_idea
+```
+
+Your profile, mode, story scope and direction choice are remembered, and finished steps are loaded from disk instead of being paid for again. The step that was interrupted runs again from its start.
+
+### API errors and rate limits
+
+The pipeline owns all retrying. It waits as long as the API's `retry-after` says (or backs off when there is none), prints every wait over 5 seconds with the reason, and gives up after 15 minutes of total waiting. There is no fixed pause between steps: it waits only when the API says so. Errors a retry cannot fix — a bad request, a rejected key, a billing problem, a spend limit — stop the run immediately. So does a model refusal, or any ending that would leave an output incomplete: the run stops with the reason instead of saving a partial output. A search turn the API paused is resumed automatically. Details: [specs/rate-management.md](specs/rate-management.md).
 
 ---
 
@@ -163,7 +181,14 @@ At startup you are prompted to choose a run profile. Profiles are defined in `co
 | 3 | Balanced — Sonnet for quality steps | $0.20–2.00 | Sonnet for research, feedback, spec, and stories. Best cost/quality trade-off. |
 | 4 | Optimal — Opus for research, Sonnet elsewhere | $3.50–6.00 | Deepest research quality. Recommended for high-stakes decisions. |
 
-Each profile configures per-step `model`, `max_tokens`, and `max_searches`. To customise, edit `config.yaml` directly.
+Each profile configures per-step `model`, `max_tokens`, and `max_searches`. To customise, edit `config.yaml` directly; the file explains each setting.
+
+- **`max_searches` is a hard cap.** It is sent to the API, which stops searching at that number. Each search adds roughly 10,000 input tokens (measured once), so a lower number is cheaper and faster but narrows the research. At a low rate-limit tier, a step's searches must fit within one minute of input allowance, or the step can never pass.
+- **`max_tokens` is a ceiling, not a budget.** It is billed only when used and does not count toward the output rate limit. Profiles 2–4 set it above the expected output, so a step normally finishes in one request; profile 1 keeps small ceilings on purpose.
+- **Steps that search use prompt caching.** The other steps do not: they make a single request, so caching would only add its write premium. How much caching saves has not been measured.
+- **Costs shown are rough.** The estimates above have not been measured with these settings, and the cost table in the run summary uses out-of-date rates for Haiku 4.5 and Opus 4.7, so its totals are not reliable.
+
+All known limits are listed in [specs/rate-management.md](specs/rate-management.md#constraints-and-limitations).
 
 ### Notion setup
 
@@ -192,6 +217,7 @@ product-agent/
 ├── orchestrator.py              # main entry point and pipeline logic
 ├── agent.py                     # skill runner, agentic loop, web search
 ├── observability.py             # cost, latency, and quality tracking
+├── run_state.py                 # per-step saving and resume state
 ├── idea-template.md             # starter template for input documents
 ├── idea.md                      # your input document (gitignored)
 ├── config.yaml                  # pipeline configuration

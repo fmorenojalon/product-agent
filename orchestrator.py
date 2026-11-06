@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import argparse
+import hashlib
 import sys
 import json
 import re
@@ -10,9 +12,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from agent import (
-    client, CONFIG, load_profile,
+    CONFIG, load_profile,
     step_model, step_max_tokens,
-    api_call_with_retry, run_skill,
+    complete, run_skill,
 )
 from connectors.discord import fetch_feedback
 from connectors.notion import push_stories
@@ -20,6 +22,7 @@ from observability import (
     RunTracker, StepMetrics, QualityResult,
     estimate_cost, check_quality, prompt_quality_failure,
 )
+from run_state import RunState, write_text_atomic
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -54,25 +57,17 @@ def compress(text: str, purpose: str, profile: dict) -> str:
 def _llm(messages: list, step: str = "", profile: dict | None = None) -> tuple[str, dict]:
     """Direct Claude API call using per-step model config from the active profile.
 
-    Returns (text, usage) where usage = {"input_tokens": int, "output_tokens": int}.
+    Returns (text, usage) summed across rounds. Continues past max_tokens and raises
+    StopReasonError on any other incomplete ending (see agent.complete).
     """
     if profile is None:
         profile = {}
-    response = api_call_with_retry(
-        lambda: client.messages.create(
-            model=step_model(step, profile),
-            max_tokens=step_max_tokens(step, profile),
-            messages=messages,
-        )
+    return complete(
+        messages,
+        model=step_model(step, profile),
+        max_tokens=step_max_tokens(step, profile),
+        step=step,
     )
-    usage = {
-        "input_tokens": response.usage.input_tokens,
-        "output_tokens": response.usage.output_tokens,
-        "cache_write_tokens": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
-        "cache_read_tokens": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
-        "search_count": 0,
-    }
-    return response.content[0].text, usage
 
 
 # ── Profile + mode selection ──────────────────────────────────────────────────
@@ -300,20 +295,22 @@ def run_stories(spec: str, profile: dict, full_scope: bool = True) -> tuple[str,
     )
 
 
-def save_outputs(
-    title: str, research: str, feedback: str, spec: str, stories: str, run_id: str,
-    tracker: RunTracker | None = None,
-) -> Path:
-    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
-    folder = Path("output") / f"{run_id}_{slug}"
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / "research-brief.md").write_text(research)
-    (folder / "feedback-synthesis.md").write_text(feedback)
-    (folder / "product-spec.md").write_text(spec)
-    (folder / "user-stories.md").write_text(stories)
-    if tracker is not None:
-        tracker.write(folder)
+def _slug(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+
+
+def _new_run_folder(title: str, run_id: str) -> Path:
+    """output/<run_id>_<slug>, with -2, -3 ... appended if an earlier run already used the name."""
+    base = Path("output") / f"{run_id}_{_slug(title)}"
+    folder, n = base, 1
+    while folder.exists():
+        n += 1
+        folder = base.with_name(f"{base.name}-{n}")
     return folder
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -323,9 +320,13 @@ def _track_step(
     fn,
     profile: dict,
     tracker: RunTracker,
-    timestamp: str,
+    reject_dir: Path | None = None,
 ) -> str:
-    """Call fn(), record metrics, run quality check, prompt on failure. Returns output text."""
+    """Call fn(), record metrics, run quality check, prompt on failure. Returns output text.
+
+    If the user declines to continue past a failed check, the step's metrics and output are
+    saved to reject_dir before the run exits — the step was paid for.
+    """
     t0 = time.time()
     output, usage = fn()
     latency = time.time() - t0
@@ -341,10 +342,10 @@ def _track_step(
     )
     quality = check_quality(step_name, output, profile)
 
+    declined = False
     if not quality.passed:
         quality.user_continued = prompt_quality_failure(step_name, quality, output[:300])
-        if not quality.user_continued:
-            sys.exit(1)
+        declined = not quality.user_continued
 
     tracker.record(StepMetrics(
         step=step_name,
@@ -358,57 +359,103 @@ def _track_step(
         cache_read_tokens=usage.get("cache_read_tokens", 0),
         search_count=usage.get("search_count", 0),
     ))
+    if declined:
+        if reject_dir is not None:
+            write_text_atomic(reject_dir / f"{step_name}.rejected.md", output)
+            tracker.write(reject_dir)
+        sys.exit(1)
     return output
 
 
-def main() -> None:
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    input_path = Path(args[0]) if args else Path("idea.md")
+def _run_step(
+    state: RunState,
+    tracker: RunTracker,
+    profile: dict,
+    step: str,
+    filename: str,
+    fn,
+    label: str | None = None,
+) -> str:
+    """Run one tracked step, saving its output and metrics at once.
 
+    A step finished in an earlier attempt is loaded from disk instead of being run again.
+    """
+    path = state.folder / filename
+    if state.is_done(step):
+        print(f"  ↺ {label or step} — loaded from {filename}")
+        return path.read_text()
+    output = _track_step(step, fn, profile, tracker, reject_dir=state.folder)
+    write_text_atomic(path, output)
+    tracker.write(state.folder)
+    state.complete(step)
+    if label:
+        print(f"  ✓ {label} complete")
+    return output
+
+
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Product Agent — product idea to Notion-ready user stories.")
+    parser.add_argument(
+        "input", nargs="?",
+        help="idea document (default: idea.md; with --resume, the one the run started with)",
+    )
+    parser.add_argument("--resume", metavar="RUN_DIR", help="continue a stopped run from its output folder")
+    return parser.parse_args(argv)
+
+
+def _load_document(state: RunState, override: str | None) -> tuple[Path, str]:
+    """The idea document of a run being resumed. Warns if it changed since the run began."""
+    input_path = Path(override or state.get("input_path"))
     if not input_path.exists():
-        print(f"Error: '{input_path}' not found.")
-        print("Create an idea.md file with your product idea, or pass a file path:")
-        print("  python orchestrator.py my-idea.md")
+        print(f"Error: '{input_path}' not found. Pass the idea document explicitly:")
+        print(f"  python orchestrator.py my-idea.md --resume {state.folder}")
         sys.exit(1)
-
-    # Profile + mode selection
-    profile = select_profile()
-    interactive = choose_mode(profile.get("brief_mode", False))
-    full_scope = choose_story_scope()
-
     document = input_path.read_text()
-    title = input_path.stem
+    if _sha256(document) != state.get("input_sha256"):
+        print(f"Warning: '{input_path}' has changed since this run started.")
+        if input("Continue with the changed document? (y/n): ").strip().lower() != "y":
+            sys.exit(1)
+        state.set(input_sha256=_sha256(document))
+    return input_path, document
+
+
+def _print_resume_hint(folder: Path) -> None:
+    print(f"\n  Run stopped. Finished steps are saved in {folder}/")
+    print(f"  Resume with: python orchestrator.py --resume {folder}\n")
+
+
+def _run_pipeline(state: RunState, profile: dict, document: str) -> None:
+    folder = state.folder
+    title = state.get("title")
+    timestamp = state.get("timestamp")
     brief = profile.get("brief_mode", False)
-    run_id = datetime.now().strftime('%Y-%m-%d_%H-%M')
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+    tracker = RunTracker.load(folder, title, timestamp)
     db_name = f"{title} — {timestamp}"
 
-    tracker = RunTracker(title=title, timestamp=timestamp)
-
-    label = f"[TEST RUN]  " if brief else ""
-    print(f"Product Agent  ·  {label}{input_path.name}\n")
-
     # Pre-step
-    print("[ Pre-step ] Identifying competitors and persona...")
-    competitors, persona = extract_competitors_and_persona(document, profile)
+    if state.is_done("pre_step"):
+        print("[ Pre-step ] Competitors and persona loaded from earlier run")
+    else:
+        print("[ Pre-step ] Identifying competitors and persona...")
+        competitors, persona = extract_competitors_and_persona(document, profile)
+        state.complete("pre_step", competitors=competitors, persona=persona)
+    competitors, persona = state.get("competitors"), state.get("persona")
     print(f"  Competitors : {', '.join(competitors)}")
     print(f"  Persona     : {persona}\n")
 
     # Phase A — research + feedback (tracked)
     print("[ Phase A ] Competitive research + user feedback...")
-    phase_a_start = time.time()
 
     uc1_msg = (
         "Analyze the competitive landscape for the following product idea.\n\n"
         f"## Product Idea Document\n\n{document}\n\n"
         f"Focus your analysis on these competitors: {', '.join(competitors)}"
     )
-    research = _track_step(
-        "research",
+    research = _run_step(
+        state, tracker, profile, "research", "research-brief.md",
         lambda: run_skill("product-analysis", uc1_msg, "", profile, "research"),
-        profile, tracker, timestamp,
+        "Competitive research",
     )
-    print("  ✓ Competitive research complete")
 
     uc2_msg = (
         "Research user feedback relevant to the following product idea.\n\n"
@@ -416,89 +463,143 @@ def main() -> None:
         f"Target persona: {persona}\n"
         f"Key products to find feedback on: {', '.join(competitors)}"
     )
-    feedback = _track_step(
-        "feedback",
+    feedback = _run_step(
+        state, tracker, profile, "feedback", "feedback-synthesis.md",
         lambda: run_skill("product-user-feedback", uc2_msg, "", profile, "feedback"),
-        profile, tracker, timestamp,
+        "User feedback synthesis",
     )
-    print("  ✓ User feedback synthesis complete\n")
+    print()
 
     # Compress Phase A outputs — one Haiku call each produces a dense summary
     # used by all downstream steps instead of raw-truncating
-    if not brief:
-        print("[ Compress ] Summarizing research and feedback...")
-        research_ctx = compress(research, "competitive research report", profile)
-        feedback_ctx = compress(feedback, "user feedback synthesis", profile)
-        print("  ✓ Summaries ready\n")
-    else:
+    if brief:
         research_ctx = research
         feedback_ctx = feedback
-
-    # Smart cooldown — Phase B triggers a fresh Sonnet call; if Phase A finished
-    # in under 65s the tokens-per-minute bucket may still be close to its limit.
-    if not brief:
-        elapsed = time.time() - phase_a_start
-        remaining = int(65 - elapsed)
-        if remaining > 0:
-            print(f"[ Cooldown ] Waiting {remaining}s for rate limit window to reset...")
-            time.sleep(remaining)
-            print()
+    else:
+        if not state.is_done("compress"):
+            print("[ Compress ] Summarizing research and feedback...")
+            state.complete(
+                "compress",
+                research_ctx=compress(research, "competitive research report", profile),
+                feedback_ctx=compress(feedback, "user feedback synthesis", profile),
+            )
+            print("  ✓ Summaries ready\n")
+        research_ctx = state.get("research_ctx")
+        feedback_ctx = state.get("feedback_ctx")
 
     # Synthesis (tracked)
     print("[ Synthesis ] Generating product direction proposals...")
-    proposals = _track_step(
-        "synthesis",
+    proposals = _run_step(
+        state, tracker, profile, "synthesis", "proposals.md",
         lambda: generate_proposals(document, research_ctx, feedback_ctx, profile),
-        profile, tracker, timestamp,
     )
-    _divider()
-    print(proposals)
-    _divider()
 
-    # Human gate
-    chosen = input(
-        "\nWhich direction do you want to pursue? (enter a number or describe your choice): "
-    ).strip()
-    print()
+    # Human gate — the answer is saved at once so it is never asked twice
+    if not state.is_done("gate"):
+        _divider()
+        print(proposals)
+        _divider()
+        chosen = input(
+            "\nWhich direction do you want to pursue? (enter a number or describe your choice): "
+        ).strip()
+        print()
+        state.complete("gate", chosen=chosen)
+    chosen = state.get("chosen")
 
     # Optional interactive interview
-    interview_context = ""
-    if interactive:
-        interview_context = run_interactive_interview(
+    if state.get("interactive") and not state.is_done("interview"):
+        state.complete("interview", interview_context=run_interactive_interview(
             document, research_ctx, feedback_ctx, chosen, profile
-        )
+        ))
+    interview_context = state.get("interview_context", "")
 
     # Phase B — spec + stories (tracked)
     print("[ Phase B ] Drafting product spec...")
-    spec = _track_step(
-        "spec",
+    spec = _run_step(
+        state, tracker, profile, "spec", "product-spec.md",
         lambda: run_spec(document, chosen, research_ctx, feedback_ctx, profile, interview_context),
-        profile, tracker, timestamp,
+        "Spec",
     )
-    print("  ✓ Spec complete\n")
+    print()
 
     print("[ Phase B ] Generating user stories...")
-    stories = _track_step(
-        "stories",
-        lambda: run_stories(spec, profile, full_scope),
-        profile, tracker, timestamp,
+    stories = _run_step(
+        state, tracker, profile, "stories", "user-stories.md",
+        lambda: run_stories(spec, profile, state.get("full_scope")),
+        "User stories",
     )
-    print("  ✓ User stories complete\n")
+    print()
 
-    push_stories(stories, db_name)
-
-    output_folder = save_outputs(title, research, feedback, spec, stories, run_id, tracker)
+    if not state.is_done("notion"):
+        push_stories(stories, db_name)
+        state.complete("notion")
 
     _divider("  Run summary")
     tracker.print_summary()
     _divider("  Run complete")
     print(f"  Profile       : {profile['name']}")
-    print(f"  Output folder : {output_folder}/")
+    print(f"  Output folder : {folder}/")
     print(  "  Files         : research-brief.md · feedback-synthesis.md")
-    print(  "                  product-spec.md · user-stories.md")
-    print(  "                  run-report.md · run-metrics.jsonl")
+    print(  "                  proposals.md · product-spec.md · user-stories.md")
+    print(  "                  run-report.md · run-metrics.jsonl · run-state.json")
     _divider()
     print()
+
+
+def main() -> None:
+    args = _parse_args(sys.argv[1:])
+
+    if args.resume:
+        try:
+            state = RunState.load(Path(args.resume))
+        except (FileNotFoundError, ValueError) as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+        input_path, document = _load_document(state, args.input)
+    else:
+        input_path = Path(args.input or "idea.md")
+        if not input_path.exists():
+            print(f"Error: '{input_path}' not found.")
+            print("Create an idea.md file with your product idea, or pass a file path:")
+            print("  python orchestrator.py my-idea.md")
+            sys.exit(1)
+
+        # Profile + mode selection
+        profile = select_profile()
+        interactive = choose_mode(profile.get("brief_mode", False))
+        full_scope = choose_story_scope()
+
+        document = input_path.read_text()
+        title = input_path.stem
+        now = datetime.now()
+        state = RunState.create(
+            _new_run_folder(title, now.strftime('%Y-%m-%d_%H-%M')),
+            input_path=str(input_path),
+            input_sha256=_sha256(document),
+            title=title,
+            timestamp=now.strftime('%Y-%m-%d %H:%M'),
+            profile_key=profile["key"],
+            interactive=interactive,
+            full_scope=full_scope,
+        )
+
+    key = state.get("profile_key")
+    profile = dict(load_profile(key))
+    if not profile:
+        print(f"Error: profile '{key}' is not in config.yaml.")
+        sys.exit(1)
+    profile["key"] = key
+
+    label = "[TEST RUN]  " if profile.get("brief_mode", False) else ""
+    print(f"Product Agent  ·  {label}{input_path.name}\n")
+    if args.resume:
+        print(f"Resuming {state.folder}/ — finished: {', '.join(state.finished) or 'nothing yet'}\n")
+
+    try:
+        _run_pipeline(state, profile, document)
+    except BaseException:
+        _print_resume_hint(state.folder)
+        raise
 
 
 if __name__ == "__main__":
