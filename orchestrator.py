@@ -28,8 +28,15 @@ from run_state import RunState, write_text_atomic
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _parse_json(text: str) -> dict:
-    text = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`").strip()
-    return json.loads(text)
+    """The first JSON object in a model reply; any text or code fence around it is ignored."""
+    decoder = json.JSONDecoder()
+    for start in (m.start() for m in re.finditer(r"\{", text)):
+        try:
+            obj, _ = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            continue
+        return obj
+    raise ValueError(f"The model's reply holds no JSON object:\n{text}")
 
 
 def _divider(label: str = "") -> None:
@@ -192,6 +199,8 @@ def extract_competitors_and_persona(document: str, profile: dict) -> tuple[list[
         ),
     }], step="pre_step", profile=profile)
     data = _parse_json(text)
+    if not isinstance(data.get("competitors"), list) or not isinstance(data.get("persona"), str):
+        raise ValueError(f'The model\'s reply lacks "competitors" (a list) or "persona" (text):\n{text}')
     return data["competitors"], data["persona"]
 
 
