@@ -13,7 +13,7 @@ load_dotenv()
 
 from agent import (
     CONFIG, load_profile,
-    step_model, step_max_tokens,
+    step_model, step_max_tokens, step_effort,
     complete, run_skill,
 )
 from connectors.discord import fetch_feedback
@@ -81,6 +81,7 @@ def _llm(
         model=step_model(step, profile),
         max_tokens=step_max_tokens(step, profile),
         stop_at_ceiling=stop_at_ceiling,
+        effort=step_effort(step, profile),
         step=step,
     )
 

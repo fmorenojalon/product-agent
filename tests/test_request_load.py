@@ -124,20 +124,24 @@ STEPS = ["pre_step", "compress", "research", "feedback", "synthesis", "spec", "s
 
 
 def test_test_profile_keeps_small_ceilings_and_no_search():
+    """Small ceilings keep a test run cheap. They are 2,000 and not smaller because thinking
+    counts toward them."""
     profile = agent.load_profile("1")
     for step in STEPS:
-        assert agent.step_max_tokens(step, profile) <= 400, step
+        assert agent.step_max_tokens(step, profile) <= 2000, step
         assert agent.step_max_searches(step, profile) == 0, step
 
 
 @pytest.mark.parametrize("key", ["2", "3", "4"])
 def test_real_profiles_leave_room_for_a_whole_document(key):
-    """Ceilings above the expected outputs (about 7k, 9k and 12k tokens), so a normal
-    document is finished in one request instead of being continued."""
+    """Ceilings above the expected outputs plus thinking, which counts toward them, so a
+    normal document is finished in one request instead of being continued."""
     profile = agent.load_profile(key)
     for step in ("research", "feedback", "spec"):
-        assert agent.step_max_tokens(step, profile) >= 16000, step
-    assert agent.step_max_tokens("stories", profile) >= 32000
+        assert agent.step_max_tokens(step, profile) >= 32000, step
+    assert agent.step_max_tokens("stories", profile) >= 64000
+    assert agent.step_max_tokens("synthesis", profile) >= 8000
+    assert agent.step_max_tokens("pre_step", profile) >= 2000
     assert agent.step_max_tokens("compress", profile) >= 1500
 
 

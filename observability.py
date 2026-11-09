@@ -9,21 +9,31 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from anthropic import Anthropic
-from agent import api_call_with_retry
+from agent import LIGHT_MODEL, api_call_with_retry
 
 # ── Pricing ───────────────────────────────────────────────────────────────────
-# Verify against https://anthropic.com/pricing before each release.
-# cache_write: tokens newly written to prompt cache (billed at ~25% premium over input)
-# cache_read:  tokens read from prompt cache (billed at ~10% of input rate)
+# Verify against https://platform.claude.com/docs/en/about-claude/pricing before each release.
+# cache_write: tokens newly written to the 5-minute prompt cache (1.25 times the input price)
+# cache_read:  tokens read from the prompt cache (0.1 times the input price, but 0.05 times on
+#              Claude Opus 5.5 and Claude Sonnet 5.5)
 # All per-million-token rates except _SEARCH_RATE which is per-1k-queries.
-RATES_UPDATED = "2026-11-06"
+# Claude Haiku 5.5 is priced here for prompts up to 100,000 tokens; a longer prompt is billed
+# higher by the API and is under-reported. Models that config.yaml does not name keep their
+# rates, so old runs and edited configs still price correctly.
+RATES_UPDATED = "2026-11-09"
 _RATES: dict[str, dict[str, float]] = {
+    "claude-haiku-5-5":          {"input": 0.10,  "output": 0.50,  "cache_write": 0.125, "cache_read": 0.01},
+    "claude-sonnet-5-5":         {"input": 2.00,  "output": 10.00, "cache_write": 2.50,  "cache_read": 0.10},
+    "claude-opus-5-5":           {"input": 4.00,  "output": 20.00, "cache_write": 5.00,  "cache_read": 0.20},
     "claude-haiku-4-5-20251001": {"input": 1.00,  "output": 5.00,  "cache_write": 1.25,  "cache_read": 0.10},
     "claude-sonnet-4-6":         {"input": 3.00,  "output": 15.00, "cache_write": 3.75,  "cache_read": 0.30},
     "claude-opus-4-7":           {"input": 5.00,  "output": 25.00, "cache_write": 6.25,  "cache_read": 0.50},
 }
 _SEARCH_RATE = 10.00  # USD per 1,000 web searches
 _SHORT: dict[str, str] = {
+    "claude-haiku-5-5":          "haiku",
+    "claude-sonnet-5-5":         "sonnet",
+    "claude-opus-5-5":           "opus",
     "claude-haiku-4-5-20251001": "haiku",
     "claude-sonnet-4-6":         "sonnet",
     "claude-opus-4-7":           "opus",
@@ -165,8 +175,11 @@ def llm_quality_score(step: str, output: str, profile: dict) -> tuple[int, str]:
     )
     response = api_call_with_retry(
         lambda: client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=200,  # room for the whole JSON: a reply cut short loses the score
+            model=LIGHT_MODEL,
+            # Thinking counts toward max_tokens, so leave room for it and for the whole JSON:
+            # a reply cut short loses the score.
+            max_tokens=1000,
+            output_config={"effort": "low"},
             messages=[{"role": "user", "content": prompt}],
         )
     )

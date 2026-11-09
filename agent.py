@@ -52,8 +52,17 @@ def _step_cfg(step: str, profile: dict) -> dict:
     return profile.get("steps", {}).get(step, {})
 
 
+# The model for a step that sets none, and for the quality scorer.
+LIGHT_MODEL = "claude-haiku-5-5"
+
+
 def step_model(step: str, profile: dict) -> str:
-    return _step_cfg(step, profile).get("model", "claude-haiku-4-5-20251001")
+    return _step_cfg(step, profile).get("model", LIGHT_MODEL)
+
+
+def step_effort(step: str, profile: dict) -> str | None:
+    """The step's effort level, or None to leave the model's own default."""
+    return _step_cfg(step, profile).get("effort")
 
 
 def step_max_tokens(step: str, profile: dict) -> int:
@@ -325,6 +334,7 @@ def complete(
     tools: list | None = None,
     cache: bool = False,
     stop_at_ceiling: bool = False,
+    effort: str | None = None,
     step: str = "",
 ) -> tuple[str, dict]:
     """Run one request to a complete answer. Returns (text, usage), usage summed across rounds.
@@ -355,6 +365,8 @@ def complete(
 
     for _ in range(_MAX_ROUNDS):
         kwargs = dict(model=model, max_tokens=max_tokens, messages=messages)
+        if effort:
+            kwargs["output_config"] = {"effort": effort}
         if system:
             kwargs["system"] = system
         if use_tools:
@@ -453,5 +465,6 @@ def run_skill(
         system=system_prompt,
         tools=[{**SEARCH_TOOL, "max_uses": max_searches}] if search else None,
         cache=search,
+        effort=step_effort(step, profile),
         step=step,
     )

@@ -4,10 +4,12 @@ import json
 import re
 import sys
 import pytest
+import yaml
 from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import agent
 from observability import (
     QualityResult,
     RunTracker,
@@ -22,49 +24,71 @@ from observability import (
 
 # ── estimate_cost ─────────────────────────────────────────────────────────────
 
-def test_estimate_cost_haiku():
-    cost = estimate_cost("claude-haiku-4-5-20251001", 1_000_000, 1_000_000)
-    assert abs(cost - (1.00 + 5.00)) < 1e-9
+# Per million tokens: input, output, 5-minute cache write, cache read.
+PUBLISHED = {
+    "claude-haiku-5-5": (0.10, 0.50, 0.125, 0.01),
+    "claude-sonnet-5-5": (2.00, 10.00, 2.50, 0.10),
+    "claude-opus-5-5": (4.00, 20.00, 5.00, 0.20),
+    "claude-haiku-4-5-20251001": (1.00, 5.00, 1.25, 0.10),
+    "claude-sonnet-4-6": (3.00, 15.00, 3.75, 0.30),
+    "claude-opus-4-7": (5.00, 25.00, 6.25, 0.50),
+}
+# Cache reads cost 0.1 times the input price, except 0.05 times on these two
+CACHE_READ_AT_HALF = {"claude-sonnet-5-5", "claude-opus-5-5"}
 
 
-def test_estimate_cost_sonnet():
-    cost = estimate_cost("claude-sonnet-4-6", 1_000_000, 1_000_000)
-    assert abs(cost - (3.00 + 15.00)) < 1e-9
+@pytest.mark.parametrize("model", list(PUBLISHED))
+def test_estimate_cost_input_and_output(model):
+    input_rate, output_rate, _, _ = PUBLISHED[model]
+    assert estimate_cost(model, 1_000_000, 1_000_000) == pytest.approx(input_rate + output_rate)
 
 
-def test_estimate_cost_opus():
-    cost = estimate_cost("claude-opus-4-7", 1_000_000, 1_000_000)
-    assert abs(cost - (5.00 + 25.00)) < 1e-9
-
-
-@pytest.mark.parametrize("model", ["claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-7"])
+@pytest.mark.parametrize("model", list(PUBLISHED))
 def test_cache_and_search_charges_follow_the_input_price(model):
-    """A 5-minute cache write costs 1.25 times the input price, a read 0.1 times, a search $0.01."""
+    """A 5-minute cache write costs 1.25 times the input price, a read 0.1 times (0.05 on
+    Sonnet 5.5 and Opus 5.5), a search $0.01."""
     base = estimate_cost(model, 1_000_000, 0)
+    read_multiplier = 0.05 if model in CACHE_READ_AT_HALF else 0.10
     assert estimate_cost(model, 0, 0, cache_write_tokens=1_000_000) == pytest.approx(base * 1.25)
-    assert estimate_cost(model, 0, 0, cache_read_tokens=1_000_000) == pytest.approx(base * 0.10)
+    assert estimate_cost(model, 0, 0, cache_read_tokens=1_000_000) == pytest.approx(base * read_multiplier)
     assert estimate_cost(model, 0, 0, search_count=1_000) == pytest.approx(10.00)
 
 
 def test_published_rates_of_each_model():
-    """Per million tokens: input, output, 5-minute cache write, cache read."""
-    published = {
-        "claude-haiku-4-5-20251001": (1.00, 5.00, 1.25, 0.10),
-        "claude-sonnet-4-6": (3.00, 15.00, 3.75, 0.30),
-        "claude-opus-4-7": (5.00, 25.00, 6.25, 0.50),
-    }
-    for model, (input_rate, output_rate, write_rate, read_rate) in published.items():
+    for model, (input_rate, output_rate, write_rate, read_rate) in PUBLISHED.items():
         cost = estimate_cost(model, 1_000_000, 1_000_000, 1_000_000, 1_000_000)
         assert cost == pytest.approx(input_rate + output_rate + write_rate + read_rate), model
 
 
+def _config_models() -> set[str]:
+    config = yaml.safe_load((Path(__file__).parent.parent / "config.yaml").read_text())
+    return {
+        step["model"]
+        for profile in config["profiles"].values()
+        for step in profile["steps"].values()
+    }
+
+
 def test_every_model_named_in_config_has_a_rate():
     """A model without a rate raises after its call is paid for, so config.yaml may only name rated models."""
-    config = (Path(__file__).parent.parent / "config.yaml").read_text()
-    models = set(re.findall(r"claude-[a-z0-9.-]+", config))
+    models = _config_models()
     assert models, "no models found in config.yaml"
     for model in models:
         estimate_cost(model, 1, 1)  # raises ValueError for an unrated model
+
+
+def test_config_uses_the_latest_model_of_each_family():
+    assert _config_models() == {"claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"}
+
+
+def test_the_default_and_scorer_models_have_rates():
+    """Neither is named in config.yaml, so the test above does not cover them."""
+    estimate_cost(agent.LIGHT_MODEL, 1, 1)
+    assert agent.step_model("anything", {}) == agent.LIGHT_MODEL
+
+
+def test_the_light_model_is_the_latest_haiku():
+    assert agent.LIGHT_MODEL == "claude-haiku-5-5"
 
 
 def test_estimate_cost_unknown_model():
@@ -265,10 +289,19 @@ def test_the_scorer_is_told_the_output_is_complete(mock_anthropic, mock_retry):
 
 @patch("observability.api_call_with_retry")
 @patch("observability.Anthropic")
-def test_the_scorer_reply_has_room_for_a_long_reason(mock_anthropic, mock_retry):
-    """A reply cut short is not valid JSON, and the score in it would be lost."""
+def test_the_scorer_reply_has_room_for_thinking_and_a_long_reason(mock_anthropic, mock_retry):
+    """Thinking counts toward max_tokens, and a reply cut short is not valid JSON."""
     mock_retry.side_effect = lambda fn: fn()
-    assert _scorer_request(mock_anthropic, "## H\n\ntext")["max_tokens"] >= 200
+    assert _scorer_request(mock_anthropic, "## H\n\ntext")["max_tokens"] >= 1000
+
+
+@patch("observability.api_call_with_retry")
+@patch("observability.Anthropic")
+def test_the_scorer_uses_the_light_model_at_low_effort(mock_anthropic, mock_retry):
+    mock_retry.side_effect = lambda fn: fn()
+    request = _scorer_request(mock_anthropic, "## H\n\ntext")
+    assert request["model"] == agent.LIGHT_MODEL
+    assert request["output_config"] == {"effort": "low"}
 
 
 @patch("observability.api_call_with_retry")
