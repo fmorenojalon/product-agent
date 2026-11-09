@@ -26,11 +26,21 @@ USAGE = {
     "cache_write_tokens": 0, "cache_read_tokens": 0, "search_count": 0,
 }
 
-# Model calls one clean run makes, per step (compress runs once for research, once for feedback)
-CLEAN_CALLS = {
-    "pre_step": 1, "research": 1, "feedback": 1, "compress": 2,
-    "synthesis": 1, "spec": 1, "stories": 1,
-}
+
+
+def clean_calls(mode: str) -> dict[str, int]:
+    """Model calls one clean run makes, per step. Compress (once for research, once for
+    feedback) runs only in summary mode."""
+    calls = {
+        "pre_step": 1, "research": 1, "feedback": 1, "compress": 2,
+        "synthesis": 1, "spec": 1, "stories": 1,
+    }
+    if mode == "full":
+        del calls["compress"]
+    return calls
+
+
+RESUME_CASES = [(mode, step) for mode in ("full", "summary") for step in clean_calls(mode)]
 STEP_FILES = {
     "research": "research-brief.md", "feedback": "feedback-synthesis.md",
     "synthesis": "proposals.md", "spec": "product-spec.md", "stories": "user-stories.md",
@@ -44,6 +54,8 @@ class FakeApi:
         self.monkeypatch = monkeypatch
         self.tmp_path = tmp_path
         self.calls = Counter()
+        self.sent: list[tuple[str, str]] = []  # (step, the text the step was sent)
+        self.context_mode = "full"
         self.fail_at: str | None = None
         self.stories_text = STORIES
         self.gate_prompts = 0
@@ -60,10 +72,14 @@ class FakeApi:
         return text, dict(USAGE)
 
     def run_skill(self, skill_path, user_message, extra_context="", profile=None, step=""):
+        self.sent.append((step, f"{user_message}\n\n{extra_context}"))
         texts = {"research": RESEARCH, "feedback": FEEDBACK, "spec": SPEC, "stories": self.stories_text}
         return self._step(step, texts[step])
 
-    def llm(self, messages, step="", profile=None):
+    def llm(self, messages, step="", profile=None, stop_at_ceiling=False):
+        self.sent.append((step, messages[0]["content"]))
+        if step == "compress":
+            assert stop_at_ceiling, "a summary must be one bounded request"
         texts = {
             "pre_step": json.dumps({"competitors": ["A", "B", "C"], "persona": "project manager"}),
             "compress": "- dense summary",
@@ -110,6 +126,10 @@ def fake(monkeypatch, tmp_path):
     monkeypatch.setattr(orchestrator, "push_stories", api.push_stories)
     monkeypatch.setattr(orchestrator, "prompt_quality_failure", api.prompt_quality_failure)
     monkeypatch.setattr(orchestrator, "select_profile", lambda: {**orchestrator.load_profile("2"), "key": "2"})
+    config_profile = orchestrator.load_profile
+    monkeypatch.setattr(  # the run reads its profile from config.yaml: stand in for an edited context_mode
+        orchestrator, "load_profile", lambda key: {**config_profile(key), "context_mode": api.context_mode},
+    )
     monkeypatch.setattr(orchestrator, "choose_mode", lambda brief: False)
     monkeypatch.setattr(orchestrator, "choose_story_scope", lambda: True)
     monkeypatch.setattr(builtins, "input", api.input)
@@ -119,15 +139,17 @@ def fake(monkeypatch, tmp_path):
 
 # ── The requirement: kill at any step, resume repeats nothing finished ───────
 
-@pytest.mark.parametrize("fail_at", list(CLEAN_CALLS))
-def test_resume_repeats_no_finished_step(fake, fail_at):
+@pytest.mark.parametrize("mode, fail_at", RESUME_CASES)
+def test_resume_repeats_no_finished_step(fake, mode, fail_at):
+    fake.context_mode = mode
     fake.fail_at = fail_at
     with pytest.raises(RuntimeError, match=fail_at):
         fake.run("idea.md")
     folder = fake.run_folder()
 
     # Everything finished before the failure is already on disk
-    order = list(CLEAN_CALLS)
+    clean = clean_calls(mode)
+    order = list(clean)
     for step, filename in STEP_FILES.items():
         finished_before = order.index(step) < order.index(fail_at)
         assert (folder / filename).exists() == finished_before, (step, filename)
@@ -135,8 +157,8 @@ def test_resume_repeats_no_finished_step(fake, fail_at):
     fake.fail_at = None
     fake.run("--resume", str(folder))
 
-    for step, clean in CLEAN_CALLS.items():
-        expected = clean + (1 if step == fail_at else 0)  # the failed attempt was paid once
+    for step, per_run in clean.items():
+        expected = per_run + (1 if step == fail_at else 0)  # the failed attempt was paid once
         assert fake.calls[step] == expected, f"{step}: {fake.calls[step]} calls, expected {expected}"
     assert fake.gate_prompts == 1, "the direction choice must not be asked twice"
     assert fake.pushed == 1

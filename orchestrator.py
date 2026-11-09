@@ -48,7 +48,11 @@ def _divider(label: str = "") -> None:
 
 
 def compress(text: str, purpose: str, profile: dict) -> str:
-    """Compress a large research/feedback/spec output to a dense summary using Haiku."""
+    """Summarise a research or feedback report with Haiku, for the `summary` context mode.
+
+    One request: the step's max_tokens is a size limit, so a summary that runs long is cut
+    there and never continued.
+    """
     result, _ = _llm([{
         "role": "user",
         "content": (
@@ -57,15 +61,18 @@ def compress(text: str, purpose: str, profile: dict) -> str:
             "Remove narrative prose, transitions, and duplicates only.\n\n"
             f"{text}"
         ),
-    }], step="compress", profile=profile)
+    }], step="compress", profile=profile, stop_at_ceiling=True)
     return result
 
 
-def _llm(messages: list, step: str = "", profile: dict | None = None) -> tuple[str, dict]:
+def _llm(
+    messages: list, step: str = "", profile: dict | None = None, stop_at_ceiling: bool = False,
+) -> tuple[str, dict]:
     """Direct Claude API call using per-step model config from the active profile.
 
-    Returns (text, usage) summed across rounds. Continues past max_tokens and raises
-    StopReasonError on any other incomplete ending (see agent.complete).
+    Returns (text, usage) summed across rounds. Continues past max_tokens, unless
+    stop_at_ceiling keeps the text cut there, and raises StopReasonError on any other
+    incomplete ending (see agent.complete).
     """
     if profile is None:
         profile = {}
@@ -73,8 +80,72 @@ def _llm(messages: list, step: str = "", profile: dict | None = None) -> tuple[s
         messages,
         model=step_model(step, profile),
         max_tokens=step_max_tokens(step, profile),
+        stop_at_ceiling=stop_at_ceiling,
         step=step,
     )
+
+
+# ── Context the later steps read ─────────────────────────────────────────────
+
+_CONTEXT_MODES = ("full", "summary")
+_SUMMARY_FILES = {"research": "research-summary.md", "feedback": "feedback-summary.md"}
+_SUMMARY_NOTE = (
+    "(This is a short summary of the full {what}. Figures, quotes and details "
+    "beyond it were left out.)\n\n"
+)
+
+
+def _context_mode(profile: dict) -> str:
+    mode = profile.get("context_mode", "full")
+    if mode not in _CONTEXT_MODES:
+        raise ValueError(
+            f"context_mode must be one of {', '.join(_CONTEXT_MODES)}, not {mode!r}. "
+            "Set it in the profile in config.yaml."
+        )
+    return mode
+
+
+def _reports_context(state: RunState, profile: dict, research: str, feedback: str) -> tuple[str, str]:
+    """The research and feedback text that synthesis, the interview and the spec read.
+
+    `full` (the default) passes both reports as they are. `summary` passes a short summary of
+    each, made once and saved next to the reports.
+    """
+    if _context_mode(profile) == "full":
+        return research, feedback
+
+    paths = {key: state.folder / name for key, name in _SUMMARY_FILES.items()}
+    if not (state.is_done("compress") and all(path.exists() for path in paths.values())):
+        print("[ Compress ] Summarizing research and feedback...")
+        summaries = {
+            "research": compress(research, "competitive research report", profile),
+            "feedback": compress(feedback, "user feedback synthesis", profile),
+        }
+        for key, summary in summaries.items():
+            write_text_atomic(paths[key], summary)
+        state.complete("compress")
+        print(
+            f"  ✓ Summaries ready: research {len(summaries['research'].split()):,} words "
+            f"(from {len(research.split()):,}), feedback {len(summaries['feedback'].split()):,} words "
+            f"(from {len(feedback.split()):,})\n"
+        )
+    return (
+        _SUMMARY_NOTE.format(what="competitive research report") + paths["research"].read_text(),
+        _SUMMARY_NOTE.format(what="user feedback synthesis") + paths["feedback"].read_text(),
+    )
+
+
+def _direction_section(proposals: str, chosen: str) -> str:
+    """What the interview and the spec are told about the direction the user picked."""
+    answer = (
+        f'The user chose: "{chosen}"\n'
+        "A number refers to the option with that number above; words are the user's own "
+        "description of the direction. Specify that direction. Any recommendation in the "
+        "proposals for another option does not apply."
+        if chosen else
+        "The user gave no answer. Specify the direction the proposals recommend."
+    )
+    return f"## Product directions proposed\n\n{proposals}\n\n## Confirmed product direction\n\n{answer}"
 
 
 # ── Profile + mode selection ──────────────────────────────────────────────────
@@ -144,7 +215,7 @@ def _parse_questions(text: str) -> list[str]:
 
 
 def run_interactive_interview(
-    document: str, research_ctx: str, feedback_ctx: str, chosen_direction: str, profile: dict
+    document: str, research_ctx: str, feedback_ctx: str, proposals: str, chosen: str, profile: dict
 ) -> str:
     questions_text, _ = _llm([{
         "role": "user",
@@ -160,7 +231,7 @@ def run_interactive_interview(
             "- Do NOT ask about anything the idea document already addresses\n"
             "- Output numbered questions only — no preamble, no explanation\n\n"
             f"## Product Idea Document\n\n{document}\n\n"
-            f"## Chosen Product Direction\n\n{chosen_direction}\n\n"
+            f"{_direction_section(proposals, chosen)}\n\n"
             f"## Competitive Research\n\n{research_ctx}\n\n"
             f"## User Feedback\n\n{feedback_ctx}"
         ),
@@ -226,14 +297,14 @@ def generate_proposals(document: str, research_ctx: str, feedback_ctx: str, prof
 
 
 def run_spec(
-    document: str, chosen_direction: str, research_ctx: str, feedback_ctx: str, profile: dict,
+    document: str, proposals: str, chosen: str, research_ctx: str, feedback_ctx: str, profile: dict,
     interview_context: str = "",
 ) -> tuple[str, dict]:
     extra = (
         "PIPELINE CONTEXT — skip the interactive interview and generate the PRD "
         "directly using the information below as pre-filled answers.\n\n"
         f"## Product Idea Document\n\n{document}\n\n"
-        f"## Confirmed product direction\n\n{chosen_direction}\n\n"
+        f"{_direction_section(proposals, chosen)}\n\n"
         f"## Competitive research\n\n{research_ctx}\n\n"
         f"## User feedback synthesis\n\n{feedback_ctx}"
     )
@@ -438,7 +509,7 @@ def _run_pipeline(state: RunState, profile: dict, document: str) -> None:
     folder = state.folder
     title = state.get("title")
     timestamp = state.get("timestamp")
-    brief = profile.get("brief_mode", False)
+    _context_mode(profile)  # fail on a bad setting before any paid call
     tracker = RunTracker.load(folder, title, timestamp)
     db_name = f"{title} — {timestamp}"
 
@@ -480,22 +551,8 @@ def _run_pipeline(state: RunState, profile: dict, document: str) -> None:
     )
     print()
 
-    # Compress Phase A outputs — one Haiku call each produces a dense summary
-    # used by all downstream steps instead of raw-truncating
-    if brief:
-        research_ctx = research
-        feedback_ctx = feedback
-    else:
-        if not state.is_done("compress"):
-            print("[ Compress ] Summarizing research and feedback...")
-            state.complete(
-                "compress",
-                research_ctx=compress(research, "competitive research report", profile),
-                feedback_ctx=compress(feedback, "user feedback synthesis", profile),
-            )
-            print("  ✓ Summaries ready\n")
-        research_ctx = state.get("research_ctx")
-        feedback_ctx = state.get("feedback_ctx")
+    # What synthesis, the interview and the spec read of the two reports (see context_mode)
+    research_ctx, feedback_ctx = _reports_context(state, profile, research, feedback)
 
     # Synthesis (tracked)
     print("[ Synthesis ] Generating product direction proposals...")
@@ -519,7 +576,7 @@ def _run_pipeline(state: RunState, profile: dict, document: str) -> None:
     # Optional interactive interview
     if state.get("interactive") and not state.is_done("interview"):
         state.complete("interview", interview_context=run_interactive_interview(
-            document, research_ctx, feedback_ctx, chosen, profile
+            document, research_ctx, feedback_ctx, proposals, chosen, profile
         ))
     interview_context = state.get("interview_context", "")
 
@@ -527,7 +584,7 @@ def _run_pipeline(state: RunState, profile: dict, document: str) -> None:
     print("[ Phase B ] Drafting product spec...")
     spec = _run_step(
         state, tracker, profile, "spec", "product-spec.md",
-        lambda: run_spec(document, chosen, research_ctx, feedback_ctx, profile, interview_context),
+        lambda: run_spec(document, proposals, chosen, research_ctx, feedback_ctx, profile, interview_context),
         "Spec",
     )
     print()

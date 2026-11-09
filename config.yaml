@@ -12,6 +12,18 @@
 #                 research. At a low rate-limit tier, keep it small enough that the whole step
 #                 fits in one minute of input allowance.
 #
+# Per-profile settings:
+#
+#   context_mode  What synthesis, the interview and the spec read of the research and
+#                 feedback reports.
+#                   full     (default) both reports, as they are. Costs a little more input than
+#                            a summary, and nothing in them is left out.
+#                   summary  a short summary of each (about 400 to 600 words requested, cut at
+#                            the compress step's max_tokens). Saved as research-summary.md and
+#                            feedback-summary.md. Figures, quotes and details are left out.
+#                            The `compress` step below is used only in this mode.
+#                 The setting is read from this file each time the run starts or resumes.
+#
 # estimated_cost figures are rough: they do not account for the larger max_tokens ceilings
 # or for prompt caching, and have not been measured.
 
@@ -22,6 +34,7 @@ profiles:
     description: "Haiku, no web search, micro prompts. Validates pipeline wiring end-to-end."
     estimated_cost: "$0.01–0.02"
     brief_mode: true
+    context_mode: full
     steps:
       pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 400, max_searches: 0 }
       compress:  { model: claude-haiku-4-5-20251001, max_tokens: 400, max_searches: 0 }
@@ -36,6 +49,7 @@ profiles:
     description: "Complete pipeline with web search. All steps use the fastest, cheapest model."
     estimated_cost: "$0.30–0.60"
     brief_mode: false
+    context_mode: full
     steps:
       pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 512,   max_searches: 0 }
       compress:  { model: claude-haiku-4-5-20251001, max_tokens: 1500,  max_searches: 0 }
@@ -50,6 +64,7 @@ profiles:
     description: "Sonnet for research, feedback, spec and stories. Best cost/quality trade-off."
     estimated_cost: "$2.00–3.00"
     brief_mode: false
+    context_mode: full
     steps:
       pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 512,   max_searches: 0 }
       compress:  { model: claude-haiku-4-5-20251001, max_tokens: 1500,  max_searches: 0 }
@@ -64,6 +79,7 @@ profiles:
     description: "Deepest research and feedback quality. Recommended for high-stakes decisions."
     estimated_cost: "$4.00–7.00"
     brief_mode: false
+    context_mode: full
     steps:
       pre_step:  { model: claude-haiku-4-5-20251001, max_tokens: 512,   max_searches: 0 }
       compress:  { model: claude-haiku-4-5-20251001, max_tokens: 1500,  max_searches: 0 }

@@ -303,6 +303,7 @@ def complete(
     system: str | None = None,
     tools: list | None = None,
     cache: bool = False,
+    stop_at_ceiling: bool = False,
     step: str = "",
 ) -> tuple[str, dict]:
     """Run one request to a complete answer. Returns (text, usage), usage summed across rounds.
@@ -310,7 +311,8 @@ def complete(
 
     Every stop reason is handled, so a partial answer is never returned silently:
       end_turn    done
-      max_tokens  continue from where the model stopped
+      max_tokens  continue from where the model stopped (with stop_at_ceiling, keep the
+                  text as it is: the ceiling is then a size limit, and the answer ends where it hit it)
       pause_turn  the server-side search loop paused; send the turn back to resume it
       anything else (refusal, tool_use, stop_sequence, context window, ...) raises StopReasonError
     A blank answer, or no final answer after _MAX_ROUNDS rounds, also raises.
@@ -352,7 +354,7 @@ def complete(
             accumulated.append(text)
 
         stop = response.stop_reason
-        if stop == "end_turn":
+        if stop == "end_turn" or (stop == "max_tokens" and stop_at_ceiling):
             break
         elif stop == "max_tokens":
             # Output was cut off — continue generation from where it stopped.
