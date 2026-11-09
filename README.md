@@ -97,13 +97,13 @@ Which direction do you want to pursue? (enter a number or describe your choice):
   ──────────────────────────────────────────────────────────────────────────────────────
   Step         Model      In tok  Out tok  Srch      Cost  Latency    Wait  Quality
   ──────────────────────────────────────────────────────────────────────────────────────
-  research     sonnet      4,821    3,102     4  $ 0.1409    18.3s       -  ✓
-  feedback     sonnet      3,944    2,871     3  $ 0.0849    15.1s    8.2s  ✓
-  synthesis    haiku       1,203      412     -  $ 0.0033     3.1s       -  ✓
-  spec         sonnet      6,203    5,441     -  $ 0.1002    22.7s       -  ✓
-  stories      sonnet      7,102    4,983     -  $ 0.0961    26.2s       -  ✓
+  research     sonnet      4,821    3,102     4  $ 0.0932    18.3s       -  ✓
+  feedback     sonnet      3,944    2,871     3  $ 0.0786    23.3s    8.2s  ✓
+  synthesis    haiku       1,203      412     -  $ 0.0003     3.1s       -  ✓
+  spec         sonnet      6,203    5,441     -  $ 0.0673    22.7s       -  ✓
+  stories      sonnet      7,102    4,983     -  $ 0.0645    26.2s       -  ✓
   ──────────────────────────────────────────────────────────────────────────────────────
-  TOTAL                   23,273   16,809     7  $ 0.4253    85.4s    8.2s
+  TOTAL                   23,273   16,809     7  $ 0.3040    93.6s    8.2s
   ──────────────────────────────────────────────────────────────────────────────────────
   * cost includes cache write (9,813 tok) + cache read (10,225 tok) + 7 search(es)
   * 1 retry, 8s waiting: 1 rate-limited, 0 server errors, 0 other
@@ -138,7 +138,7 @@ output/
     └── run-state.json           # what --resume needs (choices, finished steps)
 ```
 
-Files are written as each step finishes, so a run that stops part-way keeps everything it completed.
+Files are written as each step finishes, so a run that stops part-way keeps everything it completed. With `context_mode: summary` (see Configuration) the folder also holds `research-summary.md` and `feedback-summary.md`.
 
 ### Resuming a stopped run
 
@@ -148,7 +148,21 @@ If a run stops — an API error that retrying cannot fix, a quality check you de
 python orchestrator.py --resume output/2026-05-19_14-03_idea
 ```
 
-Your profile, mode, story scope and direction choice are remembered, and finished steps are loaded from disk instead of being paid for again. The step that was interrupted runs again from its start.
+Your profile, mode, story scope and direction choice are remembered, and finished steps are loaded from disk instead of being paid for again. The step that was interrupted runs again from its start. The `context_mode` setting is the exception: it is read from `config.yaml` again, so an edit takes effect for the steps that still have to run.
+
+### Running a step again
+
+To run one step and the steps after it again on a finished or stopped run, without paying for the earlier steps:
+
+```bash
+python orchestrator.py --resume output/2026-05-19_14-03_idea --redo stories
+```
+
+`--redo` takes `research`, `feedback`, `synthesis`, `spec` or `stories`. The earlier output of each step it runs again stays beside the new one as `<name>.previous.md`. Both attempts count in the cost totals. Redoing `synthesis` or an earlier step asks for the direction again, and redoing `stories` pushes a new Notion database.
+
+### Story length
+
+Stories are written compactly: one scope statement, at most 8 acceptance criteria and a few optional one-liners, aiming at about 3,000 characters a story. The rules, what is left out and how to measure a run are in [specs/stories-format.md](specs/stories-format.md).
 
 ### API errors and rate limits
 
@@ -180,19 +194,21 @@ At startup you are prompted to choose a run profile. Profiles are defined in `co
 
 | # | Name | Est. cost/run | Notes |
 |---|---|---|---|
-| 1 | Test — pipeline validation | $0.01–0.04 | Haiku, no search, short placeholder output. Validates the full pipeline runs end-to-end. |
-| 2 | Budget — full run, all Haiku | $0.10–0.60 | Complete pipeline with web search using the fastest, cheapest model. |
-| 3 | Balanced — Sonnet for quality steps | $0.20–2.00 | Sonnet for research, feedback, spec, and stories. Best cost/quality trade-off. |
-| 4 | Optimal — Opus for research, Sonnet elsewhere | $3.50–6.00 | Deepest research quality. Recommended for high-stakes decisions. |
+| 1 | Test — pipeline validation | under $0.02 | Haiku 5.5, no search, short placeholder output. Validates the full pipeline runs end-to-end. |
+| 2 | Budget — full run, all Haiku | $0.10–0.40 | Complete pipeline with web search using the fastest, cheapest model (Haiku 5.5). |
+| 3 | Balanced — Sonnet for quality steps | $0.70–1.20 | Sonnet 5.5 for research, feedback, spec, and stories. Best cost/quality trade-off. |
+| 4 | Optimal — Opus for research, Sonnet elsewhere | $3.00–5.00 | Opus 5.5 for research and feedback, Sonnet 5.5 elsewhere. Deepest research quality. Recommended for high-stakes decisions. |
 
-Each profile configures per-step `model`, `max_tokens`, and `max_searches`. To customise, edit `config.yaml` directly; the file explains each setting.
+Each profile configures per-step `model`, `effort`, `max_tokens`, and `max_searches`, and one `context_mode` for the whole profile. To customise, edit `config.yaml` directly; the file explains each setting.
 
+- **The models are the latest of each family:** Claude Haiku 5.5, Sonnet 5.5 and Opus 5.5. **`effort`** (`low`, `medium`, `high`, `xhigh`, `max`) sets how much a step thinks: lower is cheaper and faster. The small steps run at `low`, the main steps at `medium`, and the Opus research of profile 4 at `high`. These are starting points, not measured. Prices, rate limits and the reasons for each value: [specs/models-and-effort.md](specs/models-and-effort.md).
 - **`max_searches` is a hard cap.** It is sent to the API, which stops searching at that number. Each search adds roughly 9,000 to 12,000 input tokens (measured twice), so a lower number is cheaper and faster but narrows the research. At a low rate-limit tier, a step's searches must fit within one minute of input allowance, or the step can never pass.
-- **`max_tokens` is a ceiling, not a budget.** It is billed only when used and does not count toward the output rate limit. Profiles 2–4 set it above the expected output, so a step normally finishes in one request; profile 1 keeps small ceilings on purpose.
-- **Steps that search use prompt caching.** The other steps do not: they make a single request, so caching would only add its write premium. How much caching saves has not been measured.
-- **Costs shown are estimates.** The profile estimates above have not been measured with these settings. The run summary computes cost from the per-model rates in `observability.py` (input, output, cache and web search), which are fixed constants dated by `RATES_UPDATED` and need an edit when prices change.
+- **`max_tokens` is a ceiling, not a budget.** It is billed only when used and does not count toward the output rate limit. Thinking counts toward it. Profiles 2–4 set it above the expected output plus thinking, so a step normally finishes in one request; profile 1 keeps small ceilings on purpose.
+- **`context_mode` decides what the later steps read of the two reports.** With `full` (the default), synthesis, the interview and the spec read both reports exactly as written, so nothing is left out. With `summary`, they read a short summary of each, saved as `research-summary.md` and `feedback-summary.md`. Summaries leave out figures, quotes and detail, and `full` costs roughly $0.03 more per run (an estimate). The spec and the interview also receive the proposals and your choice, so they know which direction to specify. Details and limits: [specs/context-handling.md](specs/context-handling.md).
+- **Steps that search use prompt caching.** The other steps do not: they make a single request, so caching would only add its write premium. On Sonnet 4.6 it saved about 9% of one run's cost; it is not measured on the 5.5 models.
+- **Costs shown are estimates.** The profile estimates above are worked out from the published prices and have not been measured with the 5.5 models. The run summary computes cost from the per-model rates in `observability.py` (input, output, cache and web search), which are fixed constants dated by `RATES_UPDATED` and need an edit when prices change.
 
-All known limits are listed in [specs/rate-management.md](specs/rate-management.md#constraints-and-limitations).
+All known limits are listed in [specs/rate-management.md](specs/rate-management.md#constraints-and-limitations), [specs/context-handling.md](specs/context-handling.md#constraints-and-limitations), [specs/models-and-effort.md](specs/models-and-effort.md#constraints-and-limitations) and [specs/stories-format.md](specs/stories-format.md#constraints-and-limitations).
 
 ### Notion setup
 

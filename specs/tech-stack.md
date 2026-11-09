@@ -32,7 +32,7 @@ A short suffix appended to every skill system prompt instructs Claude to output 
 ## AI Model
 
 - **Claude** (Anthropic) — all agents call the Claude API
-- Default model: `claude-sonnet-4-6` (configurable in `config.yaml`)
+- Models: Claude Haiku 5.5, Sonnet 5.5 and Opus 5.5, set per step and profile in `config.yaml`; a step that names none uses Haiku 5.5. See [models-and-effort.md](models-and-effort.md).
 - Each skill runs in its own agentic loop; the orchestrator owns context accumulation and handoff
 
 ## Web Search

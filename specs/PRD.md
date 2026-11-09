@@ -79,14 +79,14 @@ The agent researches publicly available user feedback on comparable products and
 ### Synthesis & Proposal Generation (Orchestrator step)
 Once UC-1 and UC-2 complete, the orchestrator synthesizes both outputs and generates 2–3 distinct product direction proposals. Each proposal includes a short name and rationale grounded in the research.
 
-- Input: full input document + UC-1 brief + UC-2 synthesis
+- Input: full input document + UC-1 brief + UC-2 synthesis (the full reports by default; see [context-handling.md](context-handling.md))
 - Output: 2–3 labelled proposals printed to CLI
 - New orchestrator logic — single Claude API call, no tools, no skill
 
 ### UC-3: Spec Drafting
 Given the confirmed direction and research context, the agent generates a product specification document.
 
-- Input: full input document + confirmed proposal + UC-1 brief + UC-2 synthesis (injected as context)
+- Input: full input document + the proposals and the user's choice + UC-1 brief + UC-2 synthesis (the full reports by default), injected as context
 - Output: product spec (markdown)
 - Agent: `product-specification` skill (SKILL.md as system prompt)
 - **Context-injection mode:** The skill's interactive interview is bypassed. The orchestrator prepends the full document and all upstream research as pre-filled answers and instructs the skill to generate the PRD directly.

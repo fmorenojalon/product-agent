@@ -34,7 +34,7 @@ Only the five main pipeline steps are tracked. Pre-step extraction and compressi
 | `spec`     | UC-3 product-specification | ✓ |
 | `stories`  | UC-4 product-user-story | ✓ |
 | `pre_step` | Competitor / persona extraction | — |
-| `compress` | Summary compression  | — |
+| `compress` | Summary compression (`summary` context mode only) | — |
 
 ---
 
@@ -48,17 +48,21 @@ Applied immediately after each step completes, before passing output downstream.
 |------------|-------------------|
 | `research` | Output < 200 chars, or no `##` section header found |
 | `feedback` | Output < 200 chars, or no `##` section header found |
-| `synthesis`| Fewer than 2 proposals — detected as numbered list items (`1.` / `1)`) or `## **Option N` style headers |
+| `synthesis`| Fewer than 2 proposals — detected as numbered list items (`1.` / `1)`) or lines that start with "Option N" or "Proposal N", after any heading marks, bold, bullet or quote marks (so `**1. Option 1: …**` counts) |
 | `spec`     | Output < 500 chars, or no `##` section header found |
 | `stories`  | `parse_stories()` returns 0 stories |
 
 ### LLM quality score (profiles 3 and 4 only)
 
-Applied after the heuristic passes. A single Haiku call rates the output 1–5 and returns a one-sentence reason if the score is ≤ 2.
+Applied after the heuristic passes. A single Haiku call reads the **whole output** and is told it is complete, so it can judge how the output ends. It rates the output 1–5 and returns a one-sentence reason. The reply has room for 200 tokens, so a long reason cannot cut the JSON and lose the score.
 
 - Score 1–2: treated as a quality failure (warn + ask)
 - Score 3–5: passes; score recorded in metrics
-- Cost: ~$0.001 per step
+- The score is read from the reply's text blocks, so a thinking block ahead of the text does not matter
+- A reply with no usable JSON, or a failed call, does not stop the run, and it is not hidden: the step shows `✓ (not scored)` in the tables, the reason is listed under Quality warnings in `run-report.md`, and the terminal summary says how many steps were not scored
+- Cost: about $0.001 to $0.012 per step, by output size, and about $0.03 per run (estimate at published rates)
+
+A model's score varies: it is a second opinion, not a measurement. The same kind of output can score 4 in one run and 2 in another. A low score asks you whether to continue, and `y` keeps the output at no cost.
 
 ### Failure behaviour
 
@@ -66,7 +70,7 @@ When any check fails (heuristic or LLM score):
 
 1. A warning is printed to the terminal with the step name, the failure reason, and the first 300 chars of the output for context
 2. The user is asked interactively: `Continue anyway? (y/n)`
-3. If `n`: pipeline exits with code 1; all outputs written so far are preserved
+3. If `n`: pipeline exits with code 1; all outputs written so far are preserved, and the flagged output is saved as `<step>.rejected.md`. A resume runs that step again, and pays for it again
 4. If `y`: pipeline continues with the flagged output; the warning is recorded in metrics
 
 ---
@@ -104,7 +108,7 @@ One JSON object per line. Each object:
 ```json
 {
   "step": "research",
-  "model": "claude-sonnet-4-6",
+  "model": "claude-sonnet-5-5",
   "input_tokens": 4821,
   "output_tokens": 3102,
   "cache_write_tokens": 5012,
@@ -148,9 +152,14 @@ cost = (input_tokens        / 1_000_000) * input_rate
 
 | Model | Input $/M | Output $/M | Cache write $/M | Cache read $/M |
 |-------|----------:|----------:|----------------:|---------------:|
+| claude-haiku-5-5 | $0.10 | $0.50 | $0.125 | $0.01 |
+| claude-sonnet-5-5 | $2.00 | $10.00 | $2.50 | $0.10 |
+| claude-opus-5-5 | $4.00 | $20.00 | $5.00 | $0.20 |
 | claude-haiku-4-5-20251001 | $1.00 | $5.00 | $1.25 | $0.10 |
 | claude-sonnet-4-6 | $3.00 | $15.00 | $3.75 | $0.30 |
 | claude-opus-4-7 | $5.00 | $25.00 | $6.25 | $0.50 |
+
+Cache reads cost 0.1 times the input price, except 0.05 times on claude-sonnet-5-5 and claude-opus-5-5. claude-haiku-5-5 is priced for prompts up to 100,000 tokens. The models in the profiles are described in [models-and-effort.md](../models-and-effort.md).
 
 Web search: **$10.00 per 1,000 queries** (`_SEARCH_RATE`).
 

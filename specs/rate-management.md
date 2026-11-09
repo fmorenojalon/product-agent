@@ -4,6 +4,8 @@
 
 How the pipeline survives API throttling and faults: what it saves, when it retries, when it stops, and what it tells the user while it waits. No API fault loses finished work, and no wait is silent or unbounded.
 
+What the later steps read of the reports (full or summarised) is described in [context-handling.md](context-handling.md), the models, prices and effort in [models-and-effort.md](models-and-effort.md), and the length of the stories in [stories-format.md](stories-format.md).
+
 Out of scope: a limiter shared across machines or runs, Priority Tier, the Batch API for the whole pipeline (the human gate needs an answer in the same session), predictive or learned scheduling.
 
 ## API facts this design relies on
@@ -22,7 +24,7 @@ Out of scope: a limiter shared across machines or runs, Priority Tier, the Batch
 | `max_uses` caps the searches in one turn, including across a `pause_turn` resume. A search that fails still counts against it but is not billed | The cap is sent to the API and relied on. Searches are counted from `usage`, not from search blocks |
 | Search results are counted as input tokens. A request with one search used about 12,000 input tokens and a request with two used about 18,000 (Haiku 4.5, pricing queries: two measurements) | Each search adds a large block of input, so the search cap is also an input-rate lever |
 | With caching on, the API also writes a 5-minute cache entry after each web search result (per the API reference) | Later rounds of the same turn can read them at the cache-read price. The saving is not measured |
-| Cache writes cost 1.25 times the input price and count toward the input-tokens-per-minute limit; cache reads do not count toward it and cost a tenth. A prefix below the model's minimum (Haiku 4.5: 4,096 tokens, Opus 4.7: 2,048, Sonnet 4.6: 1,024) is silently not cached | Caching pays only where a prefix is read again; below the minimum it does nothing |
+| Cache writes cost 1.25 times the input price and count toward the input-tokens-per-minute limit; cache reads do not count toward it and cost a tenth (a twentieth on Claude Sonnet 5.5 and Claude Opus 5.5). A prefix below the model's minimum (512 tokens on Claude Haiku 5.5, Sonnet 5.5 and Opus 5.5; 4,096 on Haiku 4.5) is silently not cached | Caching pays only where a prefix is read again; below the minimum it does nothing |
 | An error event inside a stream reaches the SDK as a plain `APIStatusError` whose status is 200 | Such errors can only be classified by error type, never by status |
 
 ## Requirements
@@ -49,7 +51,7 @@ The output folder is created when the run starts. Each step writes its output th
 | `pre_step` | `run-state.json` (`competitors`, `persona`) | |
 | `research` | `research-brief.md` | |
 | `feedback` | `feedback-synthesis.md` | |
-| `compress` | `run-state.json` (`research_ctx`, `feedback_ctx`) | Skipped in test mode, where the raw outputs are the context |
+| `compress` | `research-summary.md`, `feedback-summary.md` | `summary` context mode only; in the default `full` mode there is no such step |
 | `synthesis` | `proposals.md` | |
 | human gate | `run-state.json` (`chosen`) | The user's answer is never asked twice |
 | `interview` | `run-state.json` (`interview_context`) | Interactive mode only |
@@ -70,10 +72,10 @@ Files are written atomically (temp file, then rename), so a kill mid-write never
     "input_path": "idea.md", "input_sha256": "…", "title": "idea",
     "timestamp": "2026-11-06 14:03", "profile_key": "3",
     "interactive": false, "full_scope": true,
-    "competitors": ["…"], "persona": "…", "research_ctx": "…", "feedback_ctx": "…",
+    "competitors": ["…"], "persona": "…",
     "chosen": "2", "interview_context": ""
   },
-  "done": ["pre_step", "research", "feedback", "compress", "synthesis", "gate"]
+  "done": ["pre_step", "research", "feedback", "synthesis", "gate"]
 }
 ```
 
@@ -87,6 +89,7 @@ python orchestrator.py --resume output/2026-11-06_14-03_idea
 - A step marked done is loaded from its file and not called. The first step not marked done runs again, in full: a half-finished step is never partially reused.
 - Metrics of finished steps are loaded from `run-metrics.jsonl`, so totals include everything already paid.
 - Resuming a completed run is a no-op that prints the summary again.
+- `--resume <run folder> --redo <step>` runs a step and every step after it again (`research`, `feedback`, `synthesis`, `spec` or `stories`), keeping each earlier output as `<name>.previous.md`. Redoing `synthesis` or an earlier step asks for the direction again. Both attempts stay in the metrics, and redoing `stories` pushes a new Notion database. See [stories-format.md](stories-format.md).
 
 ### When the run stops
 
@@ -141,9 +144,13 @@ One function, `complete` in `agent.py`, runs every model call: skills (`run_skil
 
 A raise stops the run like any other error: finished steps stay saved and `--resume` re-runs only the interrupted step. After a refusal, change the idea document before resuming, or the step will be refused again.
 
-Direct calls (pre-step, summaries, proposals, interview questions) use the same loop, so a summary that reaches its `max_tokens` is completed instead of silently cut off.
+Direct calls (pre-step, proposals, interview questions) use the same loop, so an answer that reaches its `max_tokens` is completed instead of silently cut off. The one exception is a summary (`summary` context mode): its `max_tokens` is a size limit, so it ends there and is not continued.
 
 A resumed search turn is sent with the same tools, because a paused turn cannot continue without them.
+
+### Text of a response
+
+A response is a list of blocks, and the text is assembled in order. Text blocks that follow one another are joined as they are, because web-search citations split a sentence across blocks. Text separated by a search or any other non-text block is separated by one blank line, so what the model says before it searches does not run into what it writes after. The text of successive rounds is joined with a newline.
 
 ## Design: request load
 
@@ -160,13 +167,13 @@ Four settings reduce what each request asks of the API. They are applied in `age
 
 | Step | Profiles 2–4 | Profile 1 (test) |
 |---|---|---|
-| `research`, `feedback`, `spec` | 16,000 | 400 |
-| `stories` | 32,000 | 400 |
-| `compress` | 1,500 | 400 |
-| `synthesis` | 3,000 | 400 |
-| `pre_step` | 512 | 400 |
+| `research`, `feedback`, `spec` | 32,000 | 2,000 |
+| `stories` | 64,000 | 2,000 |
+| `compress` (`summary` mode only) | 1,500 | 2,000 |
+| `synthesis` | 8,000 | 2,000 |
+| `pre_step` | 2,000 | 2,000 |
 
-A ceiling is not a budget. It is billed only for tokens produced and does not count toward the output-tokens-per-minute limit. The values are set above the expected output (estimated at about 7,000 tokens for research and feedback, 9,000 for the spec and 12,000 for the stories, from simulation rather than measured runs), so a normal document is finished in one request. A step that still exceeds its ceiling is completed by continuation. Profile 1 keeps small ceilings on purpose, so test runs stay cheap.
+A ceiling is not a budget. It is billed only for tokens produced and does not count toward the output-tokens-per-minute limit. The values are set above the expected output plus thinking, which counts toward the ceiling, and above the allowance for the newer tokenizer (about 30% more tokens for the same text), so a normal document is finished in one request. A step that still exceeds its ceiling is completed by continuation. Profile 1 keeps small ceilings on purpose, so test runs stay cheap; they are 2,000 and not smaller because thinking counts toward them.
 
 ### Caching scope
 
@@ -202,26 +209,27 @@ The fields appear in `run-metrics.jsonl`; as Active, Wait and Retries columns, p
 What this design does not guarantee, and what to do about it. Items marked "measured once" or "estimate" are not established facts.
 
 1. **A search cap narrows the research.** The feedback skill's own query plan asks for more searches than the configured cap (5 in profiles 2 and 3, 8 in profile 4), so a step ends with fewer sources than it would uncapped. In a check with a cap of 2 and four topics requested, the model searched two, said it had reached its search limit, and answered for those two only (measured once). The effect on quality is not measured. *What to do:* compare a run with an uncapped one; raise `max_searches` per profile in `config.yaml`, or shorten the skill's query plan.
-2. **Each search is large.** A request with one search used about 12,000 input tokens and a request with two used about 18,000 (measured twice: Haiku 4.5, pricing queries), so roughly 9,000 to 12,000 per search. Five searches is therefore roughly 45,000 to 60,000 input tokens or more in one step, and eight roughly 72,000 to 96,000 or more. A request larger than the whole input allowance of the account's tier can never pass; a limit of 30,000 input tokens per minute, for example, is below this. *What to do:* check the tier on the console's rate-limits page, and lower `max_searches` if it is low.
+2. **Each search is large.** A request with one search used about 12,000 input tokens and a request with two used about 18,000 (measured twice: Haiku 4.5, pricing queries), so roughly 9,000 to 12,000 per search (tokens per search on the 5.5 models are not measured). Five searches is therefore roughly 45,000 to 60,000 input tokens or more in one step, and eight roughly 72,000 to 96,000 or more. A request larger than the whole input allowance of the account's tier can never pass; a limit of 30,000 input tokens per minute, for example, is below this. *What to do:* check the tier on the console's rate-limits page, and lower `max_searches` if it is low.
 3. **The pipeline records the account's limits but does not act on them.** Its waits follow `retry-after` only, and it does not know the account's tier in advance. Whether exceeding a limit also adds a debt that lengthens the wait is not documented. *What to do:* check the tier on the console's rate-limits page.
 4. **Remaining allowance is an indication, not a guarantee.** The API sends the allowance when a response starts and rounds it to the nearest thousand. A long search turn can use much more afterwards, so the lowest figure recorded for a step shows the headroom at the start of its responses, not at the end.
-5. **The header figures are only partly confirmed against the real API.** They were checked against a local server that imitates it, and in one real run (Haiku 4.5) in which all four headers arrived with sensible values. Sonnet and Opus are not checked. An account may not receive every header, and the fields are then empty. *What to do:* compare a real run's headroom table with the console's rate-limit charts.
-6. **Waits in calls that are not tracked steps are not recorded.** The pre-step, compress, interview-question and quality-score calls retry and print their waits like any other call, but their waits and retries belong to no step and are not in the metrics.
+5. **The header figures are only partly confirmed against the real API.** They were checked against a local server that imitates it, and in real runs on Haiku 4.5 and Sonnet 4.6, in which all four headers arrived with sensible values. The 5.5 models and Opus are not checked. An account may not receive every header, and the fields are then empty. *What to do:* compare a real run's headroom table with the console's rate-limit charts.
+6. **Waits in calls that are not tracked steps are not recorded.** The pre-step, compress (`summary` mode), interview-question and quality-score calls retry and print their waits like any other call, but their waits and retries belong to no step and are not in the metrics.
 7. **Caching covers search steps only.** Direct calls, the spec and the stories are not cached (single round), and neither is a continuation after `max_tokens`. *What to do:* nothing, unless the spec or stories start needing several rounds.
-8. **The caching saving is not measured.** The API reference says searches write cache entries after each result when caching is on, so later rounds of a turn can read them at a tenth of the input price. In one real run (Haiku 4.5, a request with two searches) no cache tokens were written or read, so caching did not engage there. The prefix may have been below the 4,096-token minimum, or search results may not be cached as the reference describes. Whether caching saves anything in practice is unknown. A cache write costs 25% more than plain input and counts toward the input-per-minute limit, so with nothing re-read, caching adds cost and rate use. *What to do:* watch the cache columns and cost in `run-report.md` over a few runs.
-9. **A short prefix is not cached.** Below the model's minimum (Haiku 4.5: 4,096 tokens, Opus 4.7: 2,048, Sonnet 4.6: 1,024) caching silently does nothing: no error and no write. *What to do:* nothing; the cache columns show whether it happened.
+8. **The caching saving is not measured.** The API reference says searches write cache entries after each result when caching is on, so later rounds of a turn can read them at a tenth of the input price. On Sonnet 4.6, caching engaged on both search steps of a profile 3 run (cache writes of about 34,000 to 36,000 tokens and reads of about 4,600 to 56,000 per step across three runs, one idea) and saved about 9% of the first run's cost, worked out from its tokens and the rates. On Haiku 4.5, in one real request with two searches, no cache tokens were written or read, probably because the prefix was below that model's 4,096-token minimum. Whether caching engages on the 5.5 models is not measured. A cache write costs 25% more than plain input and counts toward the input-per-minute limit, so with nothing re-read, caching adds cost and rate use. *What to do:* watch the cache columns and cost in `run-report.md` over a few runs.
+9. **A short prefix is not cached.** Below the model's minimum (512 tokens on Claude Haiku 5.5, Sonnet 5.5 and Opus 5.5; 4,096 on Haiku 4.5) caching silently does nothing: no error and no write. *What to do:* nothing; the cache columns show whether it happened.
 10. **Rates are hardcoded.** `_RATES` in `observability.py` holds the per-model prices (input, output, 5-minute cache write at 1.25 times the input price, cache read at 0.1 times) and web search at $10 per 1,000, dated by `RATES_UPDATED`. A price change needs an edit. A model missing from the table raises after its call has been paid for and before its output is saved; a test fails when a model named in `config.yaml` has no rate. *What to do:* re-check the rates against the pricing page when prices change, and add a rate whenever a model is added to `config.yaml`.
 11. **Streamed usage is not confirmed against the real API.** Token counts and the search count come from the SDK's accumulation of stream events. They were checked only against a local server that imitates the stream. *What to do:* compare a real run's usage columns with the console's usage page.
 12. **A failed stream restarts from the beginning.** The partial output is discarded. Error types other than overloaded, API and rate-limit errors are raised, not retried.
-13. **The output ceilings are estimates.** They rest on estimated output sizes, not measured runs. A step that exceeds its ceiling is completed by continuation, at the price of re-sending its input, and the metrics do not record how many rounds a step took. *What to do:* if a real run shows continued steps, raise that ceiling.
-14. **Cost estimates are rough.** `estimated_cost` in `config.yaml` and the profile table in the README do not account for the larger ceilings, the search cap or caching, and have not been measured.
+13. **The output ceilings are set from measurements on other models.** On Sonnet 4.6, without thinking, the outputs were about 6,700 to 7,500 tokens for research, 5,000 to 6,000 for feedback, 7,200 to 8,200 for the spec and 11,000 to 25,900 for the stories in the long format. The ceilings add room for thinking and the newer tokenizer, and are not measured on the 5.5 models. A step that exceeds its ceiling is completed by continuation, at the price of re-sending its input, and the metrics do not record how many rounds a step took. *What to do:* if a real run shows continued steps, raise that ceiling.
+14. **Cost estimates are rough.** `estimated_cost` in `config.yaml` and the profile table in the README are worked out from the published prices and earlier token counts. They do not account for thinking and have not been measured on the 5.5 models. Two profile 3 runs on Sonnet 4.6 cost $0.99 and $1.17 as reported.
 15. **The search tool is the basic version.** Dynamic filtering (`web_search_20260209` and later) needs Claude 4.6 or later and is not eligible for zero data retention. `web_search_20260318` only adds control over what appears in the response and does not reduce token use. *What to do:* judge on a real run whether filtering is worth it.
-16. **Dropping search results from a continuation is unverified.** The continuation keeps the model's text blocks, including their citations, without the search results they point to. Whether the API accepts that is not verified. With the larger ceilings continuations should be rare.
+16. **Dropping search results from a continuation is unverified.** The continuation keeps the model's text blocks, including their citations, without the search results they point to. The thinking blocks are dropped as well (see [models-and-effort.md](models-and-effort.md)). Whether the API accepts that is not verified. With the larger ceilings continuations should be rare.
 17. **The search cap and single-request completion are checked offline only.** "Search count never exceeds the cap" and "normal documents need no continuation" can only be established by a real run. The offline tests check the shape of each request, not the API's behaviour.
 18. **No fixed pause between steps.** At a low tier a rate-limit response appears as a visible wait from the retry policy, not as a pause before the call. If one step needs more input than the tier allows in a minute, it fails (see 2).
 19. **Research and feedback never run in parallel**, whatever the account's limits would allow. This costs wall-clock time.
 20. **A failed Notion push is not retried on resume.** The push reports its own failures and does not raise, so the run records it as done. The stories are in `user-stories.md`.
 21. **Only the SDK is pinned.** The other dependencies are not pinned and there is no lockfile.
+22. **A report can open with a line that is not part of it.** Before searching, the model often announces the searches ("I'll run all the research searches…") or writes a preface ("Here is the full report…"), and the pipeline keeps that text. Removing everything before the first heading would also remove real content, such as a note on missing data. *What to do:* delete the line by hand if it matters.
 
 ## Decisions
 
@@ -234,12 +242,12 @@ What this design does not guarantee, and what to do about it. Items marked "meas
 | Persistence | One file per step plus `run-state.json` | Reuses the output files; resume needs only a small JSON for what the files do not hold |
 | Rejected output | Saved as `<step>.rejected.md` | It was paid for; the user may want to read it |
 | SDK version | Pinned (`anthropic==2.6.0`) | An unpinned range lets an SDK update change retry behaviour without any code change |
-| Incomplete answers | Continue or raise, never return | A partial brief or summary passes the quality heuristics unnoticed and feeds every later step |
+| Incomplete answers | Continue or raise, never return; a summary is cut by design | A partial brief or spec passes the quality heuristics unnoticed and feeds every later step |
 | One loop for skills and direct calls | `complete` in `agent.py` | Two copies of a continuation loop drift apart; one loop keeps every call path identical |
 | Search cap | `max_uses` from `max_searches` (5, 5, 8) | The API enforces it; a client-side count cannot |
 | Caching scope | Steps that search, while the tools are offered | The other steps are single-round: caching would only add the write premium |
 | Streaming | Every request | Needed once `max_tokens` can exceed the SDK's non-streaming size guard, and avoids idle-connection timeouts |
-| Output ceilings | 16,000 / 32,000 and the smaller ones above | Above the expected output so documents finish in one request; they do not count toward the output limit |
+| Output ceilings | 32,000 / 64,000 and the smaller ones above | Above the expected output plus thinking so documents finish in one request; they do not count toward the output limit |
 | Fixed pause between steps | None | The retry policy waits when the API says so; a fixed pause is a guess |
 
 ## Test plan
@@ -248,7 +256,11 @@ What this design does not guarantee, and what to do about it. Items marked "meas
 |---|---|
 | `tests/test_retry.py` | Each error class from the table: retried or raised, wait source, budget, visible waits, exactly one request on fail-fast errors |
 | `tests/test_run_state.py` | Round-trip, atomic writes, completion marking, load errors |
-| `tests/test_resume.py` | Failing the pipeline at each step, then resuming: finished steps are not called again, the human gate is not asked twice, the final outputs are complete, no fixed pause between steps |
+| `tests/test_resume.py` | Failing the pipeline at each step in each context mode, then resuming: finished steps are not called again, the human gate is not asked twice, the final outputs are complete, no fixed pause between steps |
+| `tests/test_context.py` | Context modes, the direction passed to the spec, and the bounded summary request (see [context-handling.md](context-handling.md)) |
+| `tests/test_text_assembly.py` | How text blocks become one text: citation-split sentences stay whole, text around a search is separated once |
+| `tests/test_effort.py` | The effort setting reaching every request (see [models-and-effort.md](models-and-effort.md)) |
+| `tests/test_redo.py` | `--redo`: what runs again, what is kept and what is refused (see [stories-format.md](stories-format.md)) |
 | `tests/test_stop_reasons.py` | One test per stop reason for `complete`, and `run_skill` and `_llm` going through it |
 | `tests/test_request_load.py` | The search cap, caching scope, streaming restart, search count source and the ceilings in `config.yaml` |
 | `tests/test_telemetry.py` | Waits and retries by kind, rate-limit headers (including failed attempts and a different tier), active time, and how the fields appear in the jsonl, report and terminal summary |

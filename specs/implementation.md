@@ -25,7 +25,7 @@ High-level phases. Each phase will be broken into detailed tasks separately.
 - **Human gate:** Proposals are printed to the CLI; the user types a selection before the pipeline continues.
 
 - **Phase B (sequential):**
-  - UC-3 (`product-specification`) runs in context-injection mode — upstream research and the confirmed direction are prepended as pre-filled context, bypassing the interactive interview.
+  - UC-3 (`product-specification`) runs in context-injection mode — upstream research (the full reports by default), the proposals and the confirmed direction are prepended as pre-filled context, bypassing the interactive interview. See [context-handling.md](context-handling.md).
   - UC-4 (`product-user-story`) runs next with UC-3's output. The mandatory clarification step is bypassed via the same pipeline-mode instruction.
 
 - **Mock connectors:** Discord returns fixture data; Notion prints to stdout.
