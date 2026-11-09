@@ -67,6 +67,11 @@ class RunState:
             self._done.append(step)
         self._save()
 
+    def forget(self, steps: list[str]) -> None:
+        """Mark steps as not done, so they run again. Their values and files are left alone."""
+        self._done[:] = [step for step in self._done if step not in steps]
+        self._save()
+
     def _save(self) -> None:
         payload = {"version": _VERSION, "values": self._values, "done": self._done}
         write_text_atomic(self.folder / STATE_FILE, json.dumps(payload, indent=2, ensure_ascii=False))

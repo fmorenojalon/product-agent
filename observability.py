@@ -18,8 +18,8 @@ from agent import LIGHT_MODEL, api_call_with_retry
 #              Claude Opus 5.5 and Claude Sonnet 5.5)
 # All per-million-token rates except _SEARCH_RATE which is per-1k-queries.
 # Claude Haiku 5.5 is priced here for prompts up to 100,000 tokens; a longer prompt is billed
-# higher by the API and is under-reported. Models that config.yaml does not name keep their
-# rates, so old runs and edited configs still price correctly.
+# higher by the API and is under-reported. Models no longer named in config.yaml keep their
+# rates, so earlier runs and edited configs still price correctly.
 RATES_UPDATED = "2026-11-09"
 _RATES: dict[str, dict[str, float]] = {
     "claude-haiku-5-5":          {"input": 0.10,  "output": 0.50,  "cache_write": 0.125, "cache_read": 0.01},

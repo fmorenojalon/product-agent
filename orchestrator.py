@@ -320,13 +320,29 @@ def run_spec(
     )
 
 
+# Stories are written compactly: the skill's own format runs to about 9,000 characters a story.
+# These rules override the skill's length and section rules. Everything before the acceptance
+# criteria becomes the Notion description, so the acceptance criteria come last (see
+# connectors.notion.parse_stories).
 _STORIES_FORMAT = """
 
-OUTPUT FORMAT — follow exactly, no variation:
-- Epics: `## Epic N: Title`
+OUTPUT FORMAT — follow exactly, no variation. These rules override the skill's own length and \
+section rules: write compact stories.
+- Start directly with the first epic: no overview, no dependency map, no closing summary.
+- Epics: `## Epic N: Title`, then a summary of at most 3 sentences.
 - Stories: `### Story N: Title`
-- Story sub-sections (Background, Scope, Notes, Out of Scope, Views, Designs, \
-Acceptance Criteria, Tracking / Metrics, Linked Stories / Dependencies): `#### Section Name`
+- Each story has only the parts below, in this order, and nothing else:
+  1. One scope statement: "As a [persona], I want [goal], So that [benefit]." Add a second \
+statement only for a different persona.
+  2. `#### Background` — only when the reason for the story is not evident from the epic. At most \
+2 sentences. Otherwise leave the heading out.
+  3. `#### Out of Scope` — at most 3 bullets, only when needed.
+  4. `Depends on:` — one line naming the stories this one needs, only when there are any.
+  5. `Assumption:` — one line, only when the story rests on an unconfirmed assumption.
+  6. `#### Acceptance Criteria` — last. At most 8 statements, each on one line, in Given/When/Then \
+form, in at most 3 named groups (the group name in bold). Cover the main flow, the key variants and \
+the single most important error case. Merge statements that test the same behavior.
+- Do not write an intro table, Notes, Views, Designs, Tracking / Metrics or Linked Stories sections.
 """
 
 
@@ -475,6 +491,37 @@ def _run_step(
     return output
 
 
+# The order a run goes through its steps, and the file each step writes. --redo clears a step
+# and every step after it, because each later step is built from the ones before.
+_STEP_ORDER = [
+    "pre_step", "research", "feedback", "compress", "synthesis", "gate", "interview",
+    "spec", "stories", "notion",
+]
+_STEP_FILES = {
+    "research": "research-brief.md",
+    "feedback": "feedback-synthesis.md",
+    "synthesis": "proposals.md",
+    "spec": "product-spec.md",
+    "stories": "user-stories.md",
+}
+
+
+def _redo(state: RunState, step: str) -> list[str]:
+    """Make `step` and every step after it run again. Returns the steps cleared.
+
+    The earlier output of each is kept as <name>.previous<ext> (a second redo replaces it), so
+    the old and new versions can be compared. Costs already paid stay in the metrics.
+    """
+    cleared = _STEP_ORDER[_STEP_ORDER.index(step):]
+    for name in cleared:
+        if name in _STEP_FILES:
+            path = state.folder / _STEP_FILES[name]
+            if path.exists():
+                path.replace(path.with_name(f"{path.stem}.previous{path.suffix}"))
+    state.forget(cleared)
+    return cleared
+
+
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Product Agent — product idea to Notion-ready user stories.")
     parser.add_argument(
@@ -482,6 +529,15 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="idea document (default: idea.md; with --resume, the one the run started with)",
     )
     parser.add_argument("--resume", metavar="RUN_DIR", help="continue a stopped run from its output folder")
+    parser.add_argument(
+        "--redo", metavar="STEP", choices=list(_STEP_FILES),
+        help=(
+            "with --resume: run STEP and every step after it again, for example stories to try "
+            "a new story format without paying for the research again. Choices: "
+            + ", ".join(_STEP_FILES) + ". The earlier outputs are kept as <name>.previous.md. "
+            "Redoing stories pushes a new Notion database."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -534,7 +590,7 @@ def _run_pipeline(state: RunState, profile: dict, document: str) -> None:
         f"Focus your analysis on these competitors: {', '.join(competitors)}"
     )
     research = _run_step(
-        state, tracker, profile, "research", "research-brief.md",
+        state, tracker, profile, "research", _STEP_FILES["research"],
         lambda: run_skill("product-analysis", uc1_msg, "", profile, "research"),
         "Competitive research",
     )
@@ -546,7 +602,7 @@ def _run_pipeline(state: RunState, profile: dict, document: str) -> None:
         f"Key products to find feedback on: {', '.join(competitors)}"
     )
     feedback = _run_step(
-        state, tracker, profile, "feedback", "feedback-synthesis.md",
+        state, tracker, profile, "feedback", _STEP_FILES["feedback"],
         lambda: run_skill("product-user-feedback", uc2_msg, "", profile, "feedback"),
         "User feedback synthesis",
     )
@@ -558,7 +614,7 @@ def _run_pipeline(state: RunState, profile: dict, document: str) -> None:
     # Synthesis (tracked)
     print("[ Synthesis ] Generating product direction proposals...")
     proposals = _run_step(
-        state, tracker, profile, "synthesis", "proposals.md",
+        state, tracker, profile, "synthesis", _STEP_FILES["synthesis"],
         lambda: generate_proposals(document, research_ctx, feedback_ctx, profile),
     )
 
@@ -584,7 +640,7 @@ def _run_pipeline(state: RunState, profile: dict, document: str) -> None:
     # Phase B — spec + stories (tracked)
     print("[ Phase B ] Drafting product spec...")
     spec = _run_step(
-        state, tracker, profile, "spec", "product-spec.md",
+        state, tracker, profile, "spec", _STEP_FILES["spec"],
         lambda: run_spec(document, proposals, chosen, research_ctx, feedback_ctx, profile, interview_context),
         "Spec",
     )
@@ -592,7 +648,7 @@ def _run_pipeline(state: RunState, profile: dict, document: str) -> None:
 
     print("[ Phase B ] Generating user stories...")
     stories = _run_step(
-        state, tracker, profile, "stories", "user-stories.md",
+        state, tracker, profile, "stories", _STEP_FILES["stories"],
         lambda: run_stories(spec, profile, state.get("full_scope")),
         "User stories",
     )
@@ -617,6 +673,10 @@ def _run_pipeline(state: RunState, profile: dict, document: str) -> None:
 def main() -> None:
     args = _parse_args(sys.argv[1:])
 
+    if args.redo and not args.resume:
+        print("Error: --redo works on an existing run: add --resume <run folder>.")
+        sys.exit(1)
+
     if args.resume:
         try:
             state = RunState.load(Path(args.resume))
@@ -624,6 +684,10 @@ def main() -> None:
             print(f"Error: {e}")
             sys.exit(1)
         input_path, document = _load_document(state, args.input)
+        if args.redo:
+            cleared = _redo(state, args.redo)
+            print(f"Redoing {args.redo}: {', '.join(cleared)} will run again. "
+                  "Earlier outputs are kept as <name>.previous.md.\n")
     else:
         input_path = Path(args.input or "idea.md")
         if not input_path.exists():
