@@ -159,13 +159,14 @@ def llm_quality_score(step: str, output: str, profile: dict) -> tuple[int, str]:
     prompt = (
         f"Rate the quality of this {step} output on a 1–5 scale "
         "(1=broken/empty, 2=severely degraded, 3=acceptable, 4=good, 5=excellent).\n"
+        "The output below is complete: judge it as a whole, including how it ends.\n"
         "Return ONLY valid JSON: {\"score\": <int 1-5>, \"reason\": \"<one sentence>\"}\n\n"
-        f"{output[:3000]}"
+        f"{output}"
     )
     response = api_call_with_retry(
         lambda: client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=80,
+            max_tokens=200,  # room for the whole JSON: a reply cut short loses the score
             messages=[{"role": "user", "content": prompt}],
         )
     )

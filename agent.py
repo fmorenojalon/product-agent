@@ -295,6 +295,27 @@ def _searches_run(response) -> int:
     return sum(1 for b in response.content if getattr(b, "type", None) in ("tool_use", "server_tool_use"))
 
 
+def _text_of(response) -> str:
+    """The text of a response, in order.
+
+    Text blocks that follow one another are joined as they are: web-search citations split a
+    sentence across blocks. Text separated by a search or any other non-text block is
+    separated by a blank line, so the model's announcement before a search does not run
+    into what it writes after it.
+    """
+    parts: list[str] = []
+    interrupted = False
+    for block in response.content:
+        if not hasattr(block, "text"):
+            interrupted = bool(parts)
+            continue
+        if interrupted:
+            parts.append("\n\n")
+            interrupted = False
+        parts.append(block.text)
+    return "".join(parts)
+
+
 def complete(
     messages: list,
     *,
@@ -349,7 +370,7 @@ def complete(
         total_cache_read_tokens += getattr(response.usage, "cache_read_input_tokens", 0) or 0
         search_count += _searches_run(response)
 
-        text = "".join(b.text for b in response.content if hasattr(b, "text"))
+        text = _text_of(response)
         if text:
             accumulated.append(text)
 

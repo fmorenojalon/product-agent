@@ -239,6 +239,38 @@ def test_llm_quality_score_low_triggers_warning(mock_anthropic, mock_retry):
     assert result.warning is not None
 
 
+def _scorer_request(mock_anthropic, output):
+    mock_anthropic.return_value.messages.create.return_value = _mock_response(4, "good output")
+    llm_quality_score("feedback", output, {})
+    return mock_anthropic.return_value.messages.create.call_args.kwargs
+
+
+@patch("observability.api_call_with_retry")
+@patch("observability.Anthropic")
+def test_the_scorer_is_sent_the_whole_output(mock_anthropic, mock_retry):
+    """A report of 20,000 characters must reach the scorer to its last line, not its first 3,000."""
+    mock_retry.side_effect = lambda fn: fn()
+    output = "## Start\n\n" + "body text. " * 1800 + "\n\n## Verdict\n\nTHE-LAST-LINE"
+    prompt = _scorer_request(mock_anthropic, output)["messages"][0]["content"]
+    assert output in prompt and prompt.endswith("THE-LAST-LINE")
+
+
+@patch("observability.api_call_with_retry")
+@patch("observability.Anthropic")
+def test_the_scorer_is_told_the_output_is_complete(mock_anthropic, mock_retry):
+    mock_retry.side_effect = lambda fn: fn()
+    prompt = _scorer_request(mock_anthropic, "## H\n\ntext")["messages"][0]["content"]
+    assert "The output below is complete" in prompt
+
+
+@patch("observability.api_call_with_retry")
+@patch("observability.Anthropic")
+def test_the_scorer_reply_has_room_for_a_long_reason(mock_anthropic, mock_retry):
+    """A reply cut short is not valid JSON, and the score in it would be lost."""
+    mock_retry.side_effect = lambda fn: fn()
+    assert _scorer_request(mock_anthropic, "## H\n\ntext")["max_tokens"] >= 200
+
+
 @patch("observability.api_call_with_retry")
 @patch("observability.Anthropic")
 def test_llm_quality_score_not_called_on_profile_1(mock_anthropic, mock_retry):
