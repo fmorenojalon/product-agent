@@ -334,3 +334,169 @@ def test_failure_reason_printed(capsys):
     captured = capsys.readouterr()
     assert "synthesis" in captured.out
     assert "only 1 proposal" in captured.out
+
+
+# ── how the models write the proposals ───────────────────────────────────────
+
+def test_heuristic_synthesis_pass_bold_option_lines():
+    """Haiku 5.5 wrote its options as a bold line at the start of each paragraph."""
+    output = (
+        "**Option 1: Drop-in Draft Engine (Standalone, GitHub-first)**\nA focused tool that drafts.\n\n"
+        "**Option 2: Publish-Once Changelog Hub with Approval Log**\nA place to approve.\n\n"
+        "**Option 3: Issue-Tracker Add-on for Linear and Jira**\nA tracker feature."
+    )
+    ok, reason = heuristic_check("synthesis", output)
+    assert ok, reason
+
+
+@pytest.mark.parametrize("output", [
+    "### Option 1 — First\n\ntext\n\n### Option 2 — Second",
+    "Option 1: First\ntext\n\nOption 2: Second",
+    "- **Option 1** First\n- **Option 2** Second",
+    "## Option 1 — First\n\ntext\n\n## Option 2 — Second",
+])
+def test_heuristic_synthesis_pass_other_option_styles(output):
+    ok, reason = heuristic_check("synthesis", output)
+    assert ok, reason
+
+
+def test_heuristic_synthesis_does_not_count_a_mention_inside_a_sentence():
+    ok, _ = heuristic_check("synthesis", "**Option 1: Only one**\nIt is better than Option 2 in every way, unlike Option 3.")
+    assert not ok
+
+
+# ── the test profile's placeholder must pass its own checks ──────────────────
+
+def test_the_test_profile_asks_for_a_placeholder_that_passes_the_spec_check():
+    prompt = agent._BRIEF_SYSTEM_PROMPT
+    assert "under 80 words" not in prompt and "about 120 words" in prompt and "'## ' sections" in prompt
+
+
+def test_a_test_run_sends_that_prompt(api, tmp_path):
+    (tmp_path / "SKILL.md").write_text("---\nname: x\n---\n# Skill\n")
+    from tests.fakes import make_response, text_block
+    api.responses = [make_response("end_turn", text_block("## H\n\nok"))]
+    agent.run_skill(str(tmp_path), "msg", profile={"brief_mode": True, "steps": {"spec": {"model": "m", "max_tokens": 100}}}, step="spec")
+    assert api.requests[0]["system"] == agent._BRIEF_SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize("output", [
+    # As Haiku 5.5 wrote them: a number, then the word Option, all inside bold
+    "**1. Option 1: The Writing Layer (Integrate, Don't Publish)**\nThis direction builds only the drafting step.\n\n"
+    "**2. Option 2: Release Governance**\nIt adds approval.\n\n**3. Option 3: Style Coach**\nIt teaches tone.",
+    "**1. Option 1: First** This direction builds it.\n**2. Option 2: Second** This one adds approval.",
+    "#### 1. Option 1 — First\n\ntext\n\n#### 2. Option 2 — Second",
+    "> **Option 1** First\n> **Option 2** Second",
+    "__Proposal 1__ First\n\n__Proposal 2__ Second",
+    "1) First direction\n2) Second direction",
+    "1: First direction\n2: Second direction",
+])
+def test_heuristic_synthesis_ignores_markdown_decoration(output):
+    ok, reason = heuristic_check("synthesis", output)
+    assert ok, reason
+
+
+@pytest.mark.parametrize("output", [
+    "Here is the only direction I would take.",
+    "**Option 1: The only one**\nIt costs 3.5 million dollars and takes 10:30 hours.",
+    "I cannot help with that.",
+    # Figures at the start of a line are not list numbers: no space follows the first number
+    "3.5 million users is the market size.\n10:30 is when the interview ran.\n2026: the year of the study.",
+])
+def test_heuristic_synthesis_still_fails_without_two_proposals(output):
+    ok, reason = heuristic_check("synthesis", output)
+    assert not ok and "proposal" in reason
+
+
+# ── a model that thinks: the reply can start with a thinking block ───────────
+
+def _thinking_block():
+    from anthropic.types import ThinkingBlock
+    block = ThinkingBlock(type="thinking", thinking="", signature="")  # the SDK's own class
+    assert not hasattr(block, "text"), "the shape that broke the scorer: a block with no .text"
+    return block
+
+
+def _reply(*blocks):
+    resp = MagicMock()
+    resp.content = list(blocks)
+    return resp
+
+
+def _json_block(score: int, reason: str):
+    from types import SimpleNamespace
+    return SimpleNamespace(type="text", text=json.dumps({"score": score, "reason": reason}))
+
+
+@patch("observability.api_call_with_retry")
+@patch("observability.Anthropic")
+def test_the_scorer_reads_the_text_after_a_thinking_block(mock_anthropic, mock_retry):
+    mock_retry.side_effect = lambda fn: fn()
+    mock_anthropic.return_value.messages.create.return_value = _reply(_thinking_block(), _json_block(5, "complete"))
+    assert llm_quality_score("spec", "## H\n\ntext", {}) == (5, "complete")
+
+
+@patch("observability.api_call_with_retry")
+@patch("observability.Anthropic")
+def test_check_quality_scores_through_a_thinking_block(mock_anthropic, mock_retry):
+    mock_retry.side_effect = lambda fn: fn()
+    mock_anthropic.return_value.messages.create.return_value = _reply(_thinking_block(), _json_block(4, "good"))
+    result = check_quality("research", "## H\n\n" + "x" * 300, {"key": "3"})
+    assert result.llm_score == 4 and not result.scorer_failed and result.warning is None
+
+
+@patch("observability.api_call_with_retry")
+@patch("observability.Anthropic")
+def test_a_reply_with_no_text_is_a_scorer_failure_not_a_pass_with_a_score(mock_anthropic, mock_retry):
+    """Thinking used the whole reply ceiling: there is nothing to read."""
+    mock_retry.side_effect = lambda fn: fn()
+    mock_anthropic.return_value.messages.create.return_value = _reply(_thinking_block())
+    result = check_quality("research", "## H\n\n" + "x" * 300, {"key": "3"})
+    assert result.scorer_failed and result.llm_score is None and result.passed
+
+
+# ── a failed score is visible ────────────────────────────────────────────────
+
+def _unscored(step="research"):
+    q = QualityResult(heuristic_ok=True, warning="scorer error: boom")
+    return StepMetrics(step=step, model="claude-sonnet-5-5", input_tokens=10, output_tokens=5,
+                       latency_s=1.0, cost_usd=0.01, quality=q)
+
+
+def test_scorer_failed_only_for_scorer_errors():
+    assert QualityResult(heuristic_ok=True, warning="scorer error: boom").scorer_failed
+    assert not QualityResult(heuristic_ok=True).scorer_failed
+    assert not QualityResult(heuristic_ok=False, warning="output too short").scorer_failed
+    assert not QualityResult(heuristic_ok=True, llm_score=2, warning="poor").scorer_failed
+
+
+def test_the_report_cell_says_not_scored():
+    from observability import _qstr
+    assert _qstr(_unscored().quality) == "✓ (not scored)"
+    assert _qstr(QualityResult(heuristic_ok=True)) == "✓", "profiles without a score are not 'not scored'"
+    assert _qstr(QualityResult(heuristic_ok=True, llm_score=4)) == "✓ (4/5)"
+
+
+def test_the_report_lists_a_failed_score_under_quality_warnings(tmp_path):
+    t = RunTracker("test", "2026-01-01 00:00")
+    t.record(_unscored("research"))
+    t.write(tmp_path)
+    report = (tmp_path / "run-report.md").read_text()
+    assert "✓ (not scored)" in report
+    assert "- **research**: scorer error: boom" in report
+    assert report.rstrip().endswith("scorer error: boom"), "not listed as 'None.'"
+
+
+def test_the_terminal_summary_counts_the_steps_not_scored(capsys):
+    t = RunTracker("test", "2026-01-01 00:00")
+    t.record(_unscored("research"))
+    t.record(_unscored("spec"))
+    t.print_summary()
+    assert "2 step(s) not scored: the model quality score failed" in capsys.readouterr().out
+
+
+def test_the_terminal_summary_is_quiet_when_every_step_is_scored_or_not_expected(capsys):
+    t = RunTracker("test", "2026-01-01 00:00")
+    t.record(_make_metrics("research"))
+    t.print_summary()
+    assert "not scored" not in capsys.readouterr().out

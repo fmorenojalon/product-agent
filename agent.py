@@ -25,6 +25,13 @@ PIPELINE MODE — CRITICAL RULES (override all other instructions):
 5. Treat all context provided as complete input and generate the full output directly.
 """
 
+# Long enough to pass the length and header checks of observability.heuristic_check (the spec
+# needs 500 characters), so a test run does not stop to ask about its own placeholder text.
+_BRIEF_SYSTEM_PROMPT = (
+    "Test mode. Output placeholder markdown of about 120 words: a title and at least three "
+    "'## ' sections, each holding a line of placeholder text. No preamble, no explanation."
+)
+
 _BRIEF_MODE_SUFFIX = """
 
 BRIEF MODE: This is a test run. Respond in 200 words or fewer. Do not perform any
@@ -447,10 +454,7 @@ def run_skill(
     if brief:
         # Skip the full SKILL.md (3000–6000 tokens) — use a micro prompt instead.
         # Goal is pipeline validation, not quality output.
-        system_prompt = (
-            "Test mode. Output minimal placeholder markdown under 80 words. "
-            "No preamble, no explanation."
-        )
+        system_prompt = _BRIEF_SYSTEM_PROMPT
     else:
         raw = open(f"{skill_path}/SKILL.md").read()
         system_prompt = _strip_frontmatter(raw) + _API_MODE_SUFFIX

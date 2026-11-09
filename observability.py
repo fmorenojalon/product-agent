@@ -18,8 +18,8 @@ from agent import LIGHT_MODEL, api_call_with_retry
 #              Claude Opus 5.5 and Claude Sonnet 5.5)
 # All per-million-token rates except _SEARCH_RATE which is per-1k-queries.
 # Claude Haiku 5.5 is priced here for prompts up to 100,000 tokens; a longer prompt is billed
-# higher by the API and is under-reported. Models no longer named in config.yaml keep their
-# rates, so earlier runs and edited configs still price correctly.
+# higher by the API and is under-reported. Models that config.yaml does not name keep their
+# rates, so old runs and edited configs still price correctly.
 RATES_UPDATED = "2026-11-09"
 _RATES: dict[str, dict[str, float]] = {
     "claude-haiku-5-5":          {"input": 0.10,  "output": 0.50,  "cache_write": 0.125, "cache_read": 0.01},
@@ -39,6 +39,11 @@ _SHORT: dict[str, str] = {
     "claude-opus-4-7":           "opus",
 }
 
+# A line that starts a proposal: after any markdown decoration (heading marks, bold, bullets, quote
+# marks), a number ("1." / "1)" / "1:") or the word Option or Proposal with a number. A mention in the
+# middle of a sentence does not count.
+_PROPOSAL_LINE = re.compile(r"^[\s>#*_+-]*(?:\d+[.):]\s+\S|(?:option|proposal)\s+\d+)", re.IGNORECASE)
+
 # Heuristic rules keyed by step name
 _HEURISTICS: dict[str, dict] = {
     "research":  {"min_chars": 200, "require_headers": True},
@@ -54,12 +59,20 @@ _LLM_SCORE_PROFILES = {"3", "4"}
 
 # ── Data classes ──────────────────────────────────────────────────────────────
 
+_SCORER_ERROR = "scorer error: "
+
+
 @dataclass
 class QualityResult:
     heuristic_ok: bool
     llm_score: int | None = None
     warning: str | None = None
     user_continued: bool | None = None
+
+    @property
+    def scorer_failed(self) -> bool:
+        """The model score could not be had. The step is not blocked, but it was not scored."""
+        return bool(self.warning) and self.warning.startswith(_SCORER_ERROR)
 
     @property
     def passed(self) -> bool:
@@ -146,11 +159,7 @@ def heuristic_check(step: str, output: str) -> tuple[bool, str]:
         return False, "no '## ' section headers found"
 
     if "min_proposals" in cfg:
-        # Match either numbered list items (1. / 1)) or numbered Option headers (## Option 1 / ## **Option 1)
-        n = len(re.findall(
-            r"(?:^\s*\d+[\.\)]\s+\S|^#{1,4}\s+\*{0,2}Option\s+\d+)",
-            output, re.MULTILINE | re.IGNORECASE,
-        ))
+        n = sum(1 for line in output.splitlines() if _PROPOSAL_LINE.match(line))
         if n < cfg["min_proposals"]:
             return False, f"only {n} numbered proposal(s), need ≥ {cfg['min_proposals']}"
 
@@ -183,7 +192,8 @@ def llm_quality_score(step: str, output: str, profile: dict) -> tuple[int, str]:
             messages=[{"role": "user", "content": prompt}],
         )
     )
-    raw = response.content[0].text.strip()
+    # The reply can start with a thinking block, which has no text: join the text blocks.
+    raw = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
     data = json.loads(raw)
     return int(data["score"]), str(data.get("reason", ""))
@@ -204,7 +214,7 @@ def check_quality(step: str, output: str, profile: dict) -> QualityResult:
         score, reason = llm_quality_score(step, output, profile)
     except Exception as e:
         # Scorer errors are non-fatal — log but don't block the pipeline
-        return QualityResult(heuristic_ok=True, warning=f"scorer error: {e}")
+        return QualityResult(heuristic_ok=True, warning=f"{_SCORER_ERROR}{e}")
 
     warning = reason if score <= 2 else None
     return QualityResult(heuristic_ok=True, llm_score=score, warning=warning)
@@ -357,6 +367,9 @@ class RunTracker:
                 f" + cache read ({self.total_cache_read_tokens:,} tok)"
                 f" + {self.total_searches} search(es)"
             )
+        unscored = sum(1 for s in self._steps if s.quality.scorer_failed)
+        if unscored:
+            print(f"  * {unscored} step(s) not scored: the model quality score failed (see run-report.md)")
         retries = self.total_rate_limited + self.total_server_errors + self.total_other_retries
         if retries:
             print(
@@ -414,7 +427,7 @@ class RunTracker:
         for s in self._steps:
             short = _SHORT.get(s.model, s.model)
             qs = _qstr(s.quality)
-            if s.quality.warning and s.quality.user_continued is not None:
+            if s.quality.scorer_failed or (s.quality.warning and s.quality.user_continued is not None):
                 warnings.append(f"- **{s.step}**: {s.quality.warning}")
             lines.append(
                 f"| {s.step} | {short} | {s.input_tokens:,} | {s.cache_write_tokens:,} |"
@@ -463,6 +476,8 @@ def _of(limit: int | None) -> str:
 
 def _qstr(q: QualityResult) -> str:
     """Single-cell quality display string for tables."""
+    if q.scorer_failed:
+        return "✓ (not scored)"
     if q.warning and q.user_continued is not None:
         return f"⚠ ({q.llm_score}/5)" if q.llm_score is not None else "⚠"
     if q.llm_score is not None:
