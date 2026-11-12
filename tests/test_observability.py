@@ -70,7 +70,7 @@ def _config_models() -> set[str]:
 
 
 def test_every_model_named_in_config_has_a_rate():
-    """A model without a rate raises after its call is paid for, so config.yaml may only name rated models."""
+    """A model without a rate stops the run at startup, so config.yaml may only name rated models."""
     models = _config_models()
     assert models, "no models found in config.yaml"
     for model in models:

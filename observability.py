@@ -90,7 +90,7 @@ class StepMetrics:
     input_tokens: int
     output_tokens: int
     latency_s: float
-    cost_usd: float
+    cost_usd: float | None  # None when the model has no rate: the step's cost is unknown
     quality: QualityResult
     cache_write_tokens: int = 0
     cache_read_tokens: int = 0
@@ -103,6 +103,7 @@ class StepMetrics:
     input_tokens_limit: int | None = None
     min_output_tokens_remaining: int | None = None
     output_tokens_limit: int | None = None
+    failed: str | None = None  # why the step ended without an output; its paid requests are counted
 
     @property
     def active_s(self) -> float:
@@ -133,7 +134,11 @@ def estimate_cost(
     cache_read_tokens: int = 0,
     search_count: int = 0,
 ) -> float:
-    """Return estimated USD cost including cache and search charges. Raises ValueError for unknown models."""
+    """Return estimated USD cost including cache and search charges. Raises ValueError for unknown models.
+
+    A run checks its models against the rate table before its first call (profile_models,
+    unrated_models), so the callers that track a step treat this error as an unknown cost.
+    """
     if model not in _RATES:
         raise ValueError(f"Unknown model: {model!r}. Add it to _RATES in observability.py.")
     r = _RATES[model]
@@ -144,6 +149,21 @@ def estimate_cost(
         + (cache_read_tokens  / 1_000_000) * r["cache_read"]
         + (search_count       / 1_000)     * _SEARCH_RATE
     )
+
+
+def profile_models(profile: dict) -> set[str]:
+    """Every model a run of this profile can call.
+
+    The models its steps name, plus LIGHT_MODEL: the default of a step that names none, and
+    the model of the quality score.
+    """
+    named = {cfg["model"] for cfg in profile.get("steps", {}).values() if "model" in cfg}
+    return named | {LIGHT_MODEL}
+
+
+def unrated_models(models) -> list[str]:
+    """The models that have no entry in the rate table, sorted."""
+    return sorted(set(models) - _RATES.keys())
 
 
 # ── Heuristic quality check ───────────────────────────────────────────────────
@@ -271,6 +291,7 @@ class RunTracker:
                 cache_write_tokens=d.get("cache_write_tokens", 0),
                 cache_read_tokens=d.get("cache_read_tokens", 0),
                 search_count=d.get("search_count", 0),
+                failed=d.get("failed"),
                 **{name: d[name] for name in _TELEMETRY_FIELDS if name in d},
             ))
         return tracker
@@ -280,7 +301,13 @@ class RunTracker:
 
     @property
     def total_cost(self) -> float:
-        return sum(s.cost_usd for s in self._steps)
+        """The cost of the steps that have one; unpriced_steps are left out."""
+        return sum(s.cost_usd for s in self._steps if s.cost_usd is not None)
+
+    @property
+    def unpriced_steps(self) -> list[str]:
+        """The steps whose model has no rate, so their cost is unknown."""
+        return [s.step for s in self._steps if s.cost_usd is None]
 
     @property
     def total_latency(self) -> float:
@@ -352,7 +379,7 @@ class RunTracker:
             srch = str(s.search_count) if s.search_count else "-"
             print(
                 f"  {s.step:<12} {short:<8} {s.input_tokens:>8,} {s.output_tokens:>8,}"
-                f"  {srch:>4}  ${s.cost_usd:>7.4f}  {s.latency_s:>6.1f}s {_wait_cell(s.wait_s)}  {_qstr(s.quality)}"
+                f"  {srch:>4}  {_cost_cell(s.cost_usd)}  {s.latency_s:>6.1f}s {_wait_cell(s.wait_s)}  {_status_cell(s)}"
             )
         print(sep)
         print(
@@ -367,6 +394,11 @@ class RunTracker:
                 f" + cache read ({self.total_cache_read_tokens:,} tok)"
                 f" + {self.total_searches} search(es)"
             )
+        if self.unpriced_steps:
+            print(f"  * {_UNPRICED_NOTE.format(steps=', '.join(self.unpriced_steps))}")
+        failed = [s.step for s in self._steps if s.failed]
+        if failed:
+            print(f"  * failed after being paid for: {', '.join(failed)}. Their cost is in the total (see run-report.md)")
         unscored = sum(1 for s in self._steps if s.quality.scorer_failed)
         if unscored:
             print(f"  * {unscored} step(s) not scored: the model quality score failed (see run-report.md)")
@@ -407,7 +439,8 @@ class RunTracker:
                     "input_tokens_limit": s.input_tokens_limit,
                     "min_output_tokens_remaining": s.min_output_tokens_remaining,
                     "output_tokens_limit": s.output_tokens_limit,
-                    "cost_usd": round(s.cost_usd, 6),
+                    "cost_usd": None if s.cost_usd is None else round(s.cost_usd, 6),
+                    "failed": s.failed,
                     "quality": {
                         "heuristic_ok": s.quality.heuristic_ok,
                         "llm_score": s.quality.llm_score,
@@ -426,13 +459,14 @@ class RunTracker:
         warnings: list[str] = []
         for s in self._steps:
             short = _SHORT.get(s.model, s.model)
-            qs = _qstr(s.quality)
+            qs = _status_cell(s)
             if s.quality.scorer_failed or (s.quality.warning and s.quality.user_continued is not None):
                 warnings.append(f"- **{s.step}**: {s.quality.warning}")
             lines.append(
                 f"| {s.step} | {short} | {s.input_tokens:,} | {s.cache_write_tokens:,} |"
                 f" {s.cache_read_tokens:,} | {s.search_count} | {s.output_tokens:,} |"
-                f" ${s.cost_usd:.4f} | {s.latency_s:.1f}s | {s.active_s:.1f}s | {s.wait_s:.1f}s |"
+                f" {'unknown' if s.cost_usd is None else f'${s.cost_usd:.4f}'} |"
+                f" {s.latency_s:.1f}s | {s.active_s:.1f}s | {s.wait_s:.1f}s |"
                 f" {s.rate_limited}/{s.server_errors}/{s.other_retries} | {qs} |"
             )
         lines.append(
@@ -457,8 +491,29 @@ class RunTracker:
                     f"| {s.step} | {_num(s.min_input_tokens_remaining)} | {_num(s.input_tokens_limit)} |"
                     f" {_num(s.min_output_tokens_remaining)} | {_num(s.output_tokens_limit)} |"
                 )
+        if self.unpriced_steps:
+            lines += ["", f"Cost unknown: {_UNPRICED_NOTE.format(steps=', '.join(self.unpriced_steps))}"]
+        failed = [s for s in self._steps if s.failed]
+        if failed:
+            lines += [
+                "", "### Failed steps", "",
+                "The requests of these steps were paid for and are in the table and the total. "
+                "A step that runs again after a failure has a second row.", "",
+                *[f"- **{s.step}**: {s.failed}" for s in failed],
+            ]
         lines += ["", "### Quality warnings", "None." if not warnings else "\n".join(warnings)]
         (folder / "run-report.md").write_text("\n".join(lines) + "\n")
+
+
+_UNPRICED_NOTE = (
+    "cost unknown for {steps}: the model has no rate in _RATES (observability.py). "
+    "The total leaves those steps out."
+)
+
+
+def _cost_cell(cost: float | None) -> str:
+    """Eight-character cell for the Cost column of the terminal summary."""
+    return f"${cost:>7.4f}" if cost is not None else f"{'unknown':>8}"
 
 
 def _wait_cell(wait_s: float) -> str:
@@ -472,6 +527,11 @@ def _num(value: int | None) -> str:
 
 def _of(limit: int | None) -> str:
     return f" of {limit:,}" if limit else ""
+
+
+def _status_cell(s: StepMetrics) -> str:
+    """The Quality cell of a step: it failed, or how its output was judged."""
+    return "✗ failed" if s.failed else _qstr(s.quality)
 
 
 def _qstr(q: QualityResult) -> str:

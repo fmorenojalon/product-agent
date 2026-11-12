@@ -133,7 +133,7 @@ output/
     ├── proposals.md             # the product directions you chose between
     ├── product-spec.md          # UC-3 product specification
     ├── user-stories.md          # UC-4 user stories
-    ├── run-report.md            # per-step cost, latency (working vs waiting), retries, quality
+    ├── run-report.md            # per-step cost, latency (working vs waiting), retries, quality, failed steps
     ├── run-metrics.jsonl        # machine-readable metrics (one JSON object per step)
     └── run-state.json           # what --resume needs (choices, finished steps)
 ```
@@ -206,7 +206,7 @@ Each profile configures per-step `model`, `effort`, `max_tokens`, and `max_searc
 - **`max_tokens` is a ceiling, not a budget.** It is billed only when used and does not count toward the output rate limit. Thinking counts toward it. Profiles 2–4 set it above the expected output plus thinking, so a step normally finishes in one request; profile 1 keeps small ceilings on purpose.
 - **`context_mode` decides what the later steps read of the two reports.** With `full` (the default), synthesis, the interview and the spec read both reports exactly as written, so nothing is left out. With `summary`, they read a short summary of each, saved as `research-summary.md` and `feedback-summary.md`. Summaries leave out figures, quotes and detail, and `full` costs roughly $0.03 more per run (an estimate). The spec and the interview also receive the proposals and your choice, so they know which direction to specify. Details and limits: [specs/context-handling.md](specs/context-handling.md).
 - **Steps that search use prompt caching.** The other steps do not: they make a single request, so caching would only add its write premium. On Sonnet 4.6 it saved about 9% of one run's cost; it is not measured on the 5.5 models.
-- **Costs shown are estimates.** The profile estimates above are worked out from the published prices and have not been measured with the 5.5 models. The run summary computes cost from the per-model rates in `observability.py` (input, output, cache and web search), which are fixed constants dated by `RATES_UPDATED` and need an edit when prices change.
+- **Costs shown are estimates.** The profile estimates above are worked out from the published prices and have not been measured with the 5.5 models. The run summary computes cost from the per-model rates in `observability.py` (input, output, cache and web search), which are fixed constants dated by `RATES_UPDATED` and need an edit when prices change. A model with no rate there stops the run before its first request, and the message names the models to add.
 
 All known limits are listed in [specs/rate-management.md](specs/rate-management.md#constraints-and-limitations), [specs/context-handling.md](specs/context-handling.md#constraints-and-limitations), [specs/models-and-effort.md](specs/models-and-effort.md#constraints-and-limitations) and [specs/stories-format.md](specs/stories-format.md#constraints-and-limitations).
 

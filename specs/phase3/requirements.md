@@ -125,6 +125,7 @@ One JSON object per line. Each object:
   "min_output_tokens_remaining": 399000,
   "output_tokens_limit": 400000,
   "cost_usd": 0.061,
+  "failed": null,
   "quality": {
     "heuristic_ok": true,
     "llm_score": 4,
@@ -134,7 +135,7 @@ One JSON object per line. Each object:
 }
 ```
 
-`llm_score` is `null` for profiles 1 and 2. `user_continued` is `null` if no failure occurred, `true` if the user chose to continue past a failure, `false` if the pipeline halted. The four rate-limit fields are `null` when the API sent no such header.
+`llm_score` is `null` for profiles 1 and 2. `user_continued` is `null` if no failure occurred, `true` if the user chose to continue past a failure, `false` if the pipeline halted. The four rate-limit fields are `null` when the API sent no such header. `cost_usd` is `null` when the step's model has no rate in the table: the cost is unknown, and the summary and `run-report.md` show it as "unknown" and name the step under the table. `failed` is `null` for a step that produced its output. It holds a one-line reason (the error, or `interrupted` for Ctrl-C) for a step that failed after some of its requests came back: the row counts those requests, shows `✗ failed` in the Quality column, and is listed under Failed steps in `run-report.md`. A step that failed before any request came back has no row.
 
 ---
 
@@ -162,6 +163,8 @@ cost = (input_tokens        / 1_000_000) * input_rate
 Cache reads cost 0.1 times the input price, except 0.05 times on claude-sonnet-5-5 and claude-opus-5-5. claude-haiku-5-5 is priced for prompts up to 100,000 tokens. The models in the profiles are described in [models-and-effort.md](../models-and-effort.md).
 
 Web search: **$10.00 per 1,000 queries** (`_SEARCH_RATE`).
+
+A model with no entry in the table never reaches a request: the run checks every model of its profile, plus the model of the quality score, before the first call and stops with the unrated models listed. `estimate_cost` raises `ValueError` for such a model. A step that is paid for with one anyway is tracked, not lost: its output is saved and its cost is recorded as unknown, with a warning, and the run total leaves it out.
 
 Cache write tokens are billed when a large prompt (e.g. a SKILL.md system prompt) is first written to Anthropic's prompt cache. Cache read tokens are billed on subsequent calls that hit the cache. Both are reported as separate fields on `response.usage` — distinct from `input_tokens`.
 

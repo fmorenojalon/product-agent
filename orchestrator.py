@@ -19,7 +19,8 @@ from connectors.discord import fetch_feedback
 from connectors.notion import push_stories
 from observability import (
     RunTracker, StepMetrics, QualityResult,
-    estimate_cost, check_quality, prompt_quality_failure, telemetry_from_usage,
+    estimate_cost, check_quality, profile_models, prompt_quality_failure, telemetry_from_usage,
+    unrated_models,
 )
 from run_state import RunState, write_text_atomic
 
@@ -399,6 +400,50 @@ def _sha256(text: str) -> str:
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+def _price(step_name: str, model: str, usage: dict) -> float | None:
+    """The cost of a step's usage, or None (with a warning) when its model has no rate."""
+    try:
+        return estimate_cost(
+            model,
+            usage["input_tokens"],
+            usage["output_tokens"],
+            usage.get("cache_write_tokens", 0),
+            usage.get("cache_read_tokens", 0),
+            usage.get("search_count", 0),
+        )
+    except ValueError:
+        # The step was paid for and its output must be kept: record the cost as unknown.
+        print(f"\n  ⚠  Cost unknown for step '{step_name}': {model!r} has no rate in _RATES (observability.py).")
+        return None
+
+
+def _step_metrics(
+    step_name: str, profile: dict, usage: dict, latency: float, quality: QualityResult, failed: str | None = None,
+) -> StepMetrics:
+    model = step_model(step_name, profile)
+    return StepMetrics(
+        step=step_name,
+        model=model,
+        input_tokens=usage["input_tokens"],
+        output_tokens=usage["output_tokens"],
+        latency_s=latency,
+        cost_usd=_price(step_name, model, usage),
+        quality=quality,
+        cache_write_tokens=usage.get("cache_write_tokens", 0),
+        cache_read_tokens=usage.get("cache_read_tokens", 0),
+        search_count=usage.get("search_count", 0),
+        failed=failed,
+        **telemetry_from_usage(usage),
+    )
+
+
+def _failure_reason(error: BaseException) -> str:
+    """One line saying why a step ended without an output."""
+    if isinstance(error, KeyboardInterrupt):
+        return "interrupted"
+    return " ".join(f"{type(error).__name__}: {error}".split())[:200]
+
+
 def _track_step(
     step_name: str,
     fn,
@@ -408,22 +453,29 @@ def _track_step(
 ) -> str:
     """Call fn(), record metrics, run quality check, prompt on failure. Returns output text.
 
+    If fn() fails after paid requests (see agent.complete), a row marked failed records what
+    they cost, and the metrics are saved to reject_dir before the error goes on.
+
     If the user declines to continue past a failed check, the step's metrics and output are
     saved to reject_dir before the run exits — the step was paid for.
     """
     t0 = time.time()
-    output, usage = fn()
+    try:
+        output, usage = fn()
+    except BaseException as error:
+        paid = getattr(error, "paid_usage", None)
+        if paid:
+            failed = _step_metrics(
+                step_name, profile, paid, time.time() - t0, QualityResult(heuristic_ok=False), _failure_reason(error),
+            )
+            tracker.record(failed)
+            spent = "cost unknown" if failed.cost_usd is None else f"${failed.cost_usd:.4f}"
+            print(f"\n  ⚠  Step '{step_name}' failed after paid requests ({spent}); recorded in run-report.md.")
+            if reject_dir is not None:
+                tracker.write(reject_dir)
+        raise
     latency = time.time() - t0
 
-    model = step_model(step_name, profile)
-    cost = estimate_cost(
-        model,
-        usage["input_tokens"],
-        usage["output_tokens"],
-        usage.get("cache_write_tokens", 0),
-        usage.get("cache_read_tokens", 0),
-        usage.get("search_count", 0),
-    )
     quality = check_quality(step_name, output, profile)
 
     declined = False
@@ -431,19 +483,7 @@ def _track_step(
         quality.user_continued = prompt_quality_failure(step_name, quality, output[:300])
         declined = not quality.user_continued
 
-    tracker.record(StepMetrics(
-        step=step_name,
-        model=model,
-        input_tokens=usage["input_tokens"],
-        output_tokens=usage["output_tokens"],
-        latency_s=latency,
-        cost_usd=cost,
-        quality=quality,
-        cache_write_tokens=usage.get("cache_write_tokens", 0),
-        cache_read_tokens=usage.get("cache_read_tokens", 0),
-        search_count=usage.get("search_count", 0),
-        **telemetry_from_usage(usage),
-    ))
+    tracker.record(_step_metrics(step_name, profile, usage, latency, quality))
     if declined:
         if reject_dir is not None:
             write_text_atomic(reject_dir / f"{step_name}.rejected.md", output)
@@ -709,7 +749,16 @@ def main() -> None:
         sys.exit(1)
     profile["key"] = key
 
-    label = "[TEST RUN]  " if profile.get("brief_mode", False) else ""
+    # Before any request: a model without a rate would be paid for and then priced as unknown.
+    unrated = unrated_models(profile_models(profile))
+    if unrated:
+        print(f"Error: profile '{key}' uses {', '.join(unrated)}, which has no rate in _RATES (observability.py).")
+        print("Add its prices there (pricing page: https://platform.claude.com/docs/en/about-claude/pricing)")
+        print("or change the model in config.yaml. Nothing was sent to the API.")
+        print(f"Then resume with: python orchestrator.py --resume {state.folder}")
+        sys.exit(1)
+
+    label ="[TEST RUN]  " if profile.get("brief_mode", False) else ""
     print(f"Product Agent  ·  {label}{input_path.name}\n")
     if args.resume:
         print(f"Resuming {state.folder}/ — finished: {', '.join(state.finished) or 'nothing yet'}\n")

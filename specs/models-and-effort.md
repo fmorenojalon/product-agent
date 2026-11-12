@@ -79,7 +79,7 @@ A response can carry `thinking` blocks. They arrive with empty text, because the
 
 ## Changing a model or an effort
 
-Edit `model` or `effort` for a step in `config.yaml`. A model that is not in `_RATES` in `observability.py` needs a rate first: a step with an unrated model raises after its call has been paid for, and a test fails when `config.yaml` names an unrated model.
+Edit `model` or `effort` for a step in `config.yaml`. A model that is not in `_RATES` in `observability.py` needs a rate first. Before its first request, a run checks every model of the chosen profile, plus Haiku 5.5 (the default of a step that names no model, and the model of the quality score). If any has no rate, the run stops with the unrated models listed and the command to resume with, whether it is new or resumed. A test also fails when `config.yaml` names an unrated model.
 
 ## Constraints and limitations
 

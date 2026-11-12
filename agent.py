@@ -372,6 +372,10 @@ def complete(
       anything else (refusal, tool_use, stop_sequence, context window, ...) raises StopReasonError
     A blank answer, or no final answer after _MAX_ROUNDS rounds, also raises.
 
+    Whatever raises, an error that follows paid rounds (a refusal, an API error after the
+    retries, Ctrl-C) carries their usage, in the same form as the return value, as
+    `error.paid_usage`. A request that did not come back is not in it: its usage is unknown.
+
     tools are offered on the first round and on every resumed round, but not on a
     continuation after max_tokens (the search results are dropped from what is sent back).
     cache=True adds automatic prompt caching to the rounds that offer tools. It is not
@@ -385,70 +389,80 @@ def complete(
     total_output_tokens = 0
     total_cache_write_tokens = 0
     total_cache_read_tokens = 0
+    paid_rounds = 0  # requests that came back, so whose usage is known
     stats = CallStats()
     use_tools = bool(tools)
 
-    for _ in range(_MAX_ROUNDS):
-        kwargs = dict(model=model, max_tokens=max_tokens, messages=messages)
-        if effort:
-            kwargs["output_config"] = {"effort": effort}
-        if system:
-            kwargs["system"] = system
-        if use_tools:
-            kwargs["tools"] = tools
-            if cache:
-                kwargs["cache_control"] = {"type": "ephemeral"}
+    def usage_so_far() -> dict:
+        return {
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
+            "cache_write_tokens": total_cache_write_tokens,
+            "cache_read_tokens": total_cache_read_tokens,
+            "search_count": search_count,
+            **stats.as_usage(),
+        }
 
-        response = api_call_with_retry(lambda: _request(kwargs, stats), stats=stats)
+    try:
+        for _ in range(_MAX_ROUNDS):
+            kwargs = dict(model=model, max_tokens=max_tokens, messages=messages)
+            if effort:
+                kwargs["output_config"] = {"effort": effort}
+            if system:
+                kwargs["system"] = system
+            if use_tools:
+                kwargs["tools"] = tools
+                if cache:
+                    kwargs["cache_control"] = {"type": "ephemeral"}
 
-        total_input_tokens += response.usage.input_tokens
-        total_output_tokens += response.usage.output_tokens
-        total_cache_write_tokens += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
-        total_cache_read_tokens += getattr(response.usage, "cache_read_input_tokens", 0) or 0
-        search_count += _searches_run(response)
+            response = api_call_with_retry(lambda: _request(kwargs, stats), stats=stats)
 
-        text = _text_of(response)
-        if text:
-            answer += (joiner if answer else "") + text
+            total_input_tokens += response.usage.input_tokens
+            total_output_tokens += response.usage.output_tokens
+            total_cache_write_tokens += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+            total_cache_read_tokens += getattr(response.usage, "cache_read_input_tokens", 0) or 0
+            search_count += _searches_run(response)
+            paid_rounds += 1
 
-        stop = response.stop_reason
-        if stop == "end_turn" or (stop == "max_tokens" and stop_at_ceiling):
-            break
-        elif stop == "max_tokens":
-            # Output was cut off — continue generation from where it stopped.
-            # Strip server_tool_use + web_search_tool_result blocks before storing:
-            # each search result carries ~27k chars of encrypted_content that would
-            # push the continuation request over the 30k token/min rate limit.
-            # The model's partial text already incorporates the search findings.
-            use_tools = False
-            joiner = ""  # the cut can fall inside a word or a table row: add nothing between the pieces
-            text_blocks = [b for b in response.content if getattr(b, "type", "") == "text"]
-            messages.append({"role": "assistant", "content": text_blocks or response.content})
-            messages.append({"role": "user", "content": _CONTINUE_PROMPT})
-        elif stop == "pause_turn":
-            # The API paused a long search turn. Sending it back unchanged resumes it.
-            # Nothing is stripped: the paused search has to stay intact.
-            joiner = "\n"
-            messages.append({"role": "assistant", "content": response.content})
-        elif stop == "refusal":
-            raise StopReasonError(step, stop, _refusal_detail(response))
+            text = _text_of(response)
+            if text:
+                answer += (joiner if answer else "") + text
+
+            stop = response.stop_reason
+            if stop == "end_turn" or (stop == "max_tokens" and stop_at_ceiling):
+                break
+            elif stop == "max_tokens":
+                # Output was cut off — continue generation from where it stopped.
+                # Strip server_tool_use + web_search_tool_result blocks before storing:
+                # each search result carries ~27k chars of encrypted_content that would
+                # push the continuation request over the 30k token/min rate limit.
+                # The model's partial text already incorporates the search findings.
+                use_tools = False
+                joiner = ""  # the cut can fall inside a word or a table row: add nothing between the pieces
+                text_blocks = [b for b in response.content if getattr(b, "type", "") == "text"]
+                messages.append({"role": "assistant", "content": text_blocks or response.content})
+                messages.append({"role": "user", "content": _CONTINUE_PROMPT})
+            elif stop == "pause_turn":
+                # The API paused a long search turn. Sending it back unchanged resumes it.
+                # Nothing is stripped: the paused search has to stay intact.
+                joiner = "\n"
+                messages.append({"role": "assistant", "content": response.content})
+            elif stop == "refusal":
+                raise StopReasonError(step, stop, _refusal_detail(response))
+            else:
+                raise StopReasonError(step, stop)
         else:
-            raise StopReasonError(step, stop)
-    else:
-        raise StopReasonError(step, None, f"no final answer after {_MAX_ROUNDS} rounds")
+            raise StopReasonError(step, None, f"no final answer after {_MAX_ROUNDS} rounds")
 
-    text = answer
-    if not text.strip():
-        raise StopReasonError(step, "end_turn", "the model returned no text")
-    usage = {
-        "input_tokens": total_input_tokens,
-        "output_tokens": total_output_tokens,
-        "cache_write_tokens": total_cache_write_tokens,
-        "cache_read_tokens": total_cache_read_tokens,
-        "search_count": search_count,
-        **stats.as_usage(),
-    }
-    return text, usage
+        text = answer
+        if not text.strip():
+            raise StopReasonError(step, "end_turn", "the model returned no text")
+    except BaseException as error:
+        # Rounds that came back were paid for even though the call fails, Ctrl-C included.
+        if paid_rounds:
+            error.paid_usage = usage_so_far()
+        raise
+    return text, usage_so_far()
 
 
 def run_skill(
