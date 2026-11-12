@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Unit tests for the Notion connector. No real API calls, no cost."""
+import io
 import os
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import MagicMock, patch
 
-from connectors.notion import parse_stories, create_database, push_stories
+from connectors.notion import PushOutcome, parse_stories, create_database, push_stories
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -260,7 +262,7 @@ class TestPushStories(unittest.TestCase):
         mock_notion.databases.create.return_value = DB_CREATE_RESPONSE
         with patch.dict(os.environ, {"NOTION_TOKEN": "secret_t", "NOTION_PARENT_PAGE_ID": "pg-1"}), \
              patch("connectors.notion.NotionClient", return_value=mock_notion):
-            push_stories(stories_md, db_name)
+            self.outcome = push_stories(stories_md, db_name)
         return mock_notion
 
     def test_skips_when_token_missing(self):
@@ -268,8 +270,18 @@ class TestPushStories(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k not in ("NOTION_TOKEN", "NOTION_PARENT_PAGE_ID")}
         with patch.dict(os.environ, env, clear=True), \
              patch("connectors.notion.NotionClient", return_value=mock_notion):
-            push_stories(FIXTURE_MARKDOWN, "some db")
+            outcome = push_stories(FIXTURE_MARKDOWN, "some db")
         mock_notion.pages.create.assert_not_called()
+        self.assertIs(outcome, PushOutcome.SKIPPED)
+
+    def test_skips_when_the_client_library_is_missing(self):
+        with patch.dict(os.environ, {"NOTION_TOKEN": "secret_t", "NOTION_PARENT_PAGE_ID": "pg-1"}), \
+             patch("connectors.notion._NOTION_AVAILABLE", False):
+            self.assertIs(push_stories(FIXTURE_MARKDOWN, "some db"), PushOutcome.SKIPPED)
+
+    def test_pushed_when_every_story_is_written(self):
+        self._run()
+        self.assertIs(self.outcome, PushOutcome.PUSHED)
 
     def test_creates_one_database_per_call(self):
         mock_notion = self._run()
@@ -308,14 +320,38 @@ class TestPushStories(unittest.TestCase):
         mock_notion.databases.create.side_effect = Exception("401 Unauthorized")
         with patch.dict(os.environ, {"NOTION_TOKEN": "secret_t", "NOTION_PARENT_PAGE_ID": "pg-1"}), \
              patch("connectors.notion.NotionClient", return_value=mock_notion):
-            push_stories(FIXTURE_MARKDOWN, "some db")  # must not raise
+            outcome = push_stories(FIXTURE_MARKDOWN, "some db")  # must not raise
+        self.assertIs(outcome, PushOutcome.FAILED)
+
+    def test_a_failure_before_the_database_exists_names_no_database(self):
+        mock_notion = MagicMock()
+        mock_notion.databases.create.side_effect = Exception("object_not_found")
+        out = io.StringIO()
+        with patch.dict(os.environ, {"NOTION_TOKEN": "secret_t", "NOTION_PARENT_PAGE_ID": "pg-1"}), \
+             patch("connectors.notion.NotionClient", return_value=mock_notion), redirect_stdout(out):
+            push_stories(FIXTURE_MARKDOWN, "some db")
+        self.assertIn("object_not_found", out.getvalue())
+        self.assertNotIn("holds", out.getvalue())
+
+    def test_a_failure_after_the_database_exists_names_it_and_the_stories_written(self):
+        mock_notion = MagicMock()
+        mock_notion.databases.create.return_value = DB_CREATE_RESPONSE
+        mock_notion.pages.create.side_effect = [None, Exception("rate_limited")]
+        out = io.StringIO()
+        with patch.dict(os.environ, {"NOTION_TOKEN": "secret_t", "NOTION_PARENT_PAGE_ID": "pg-1"}), \
+             patch("connectors.notion.NotionClient", return_value=mock_notion), redirect_stdout(out):
+            outcome = push_stories(FIXTURE_MARKDOWN, "some db")
+        self.assertIs(outcome, PushOutcome.FAILED)
+        self.assertIn("The database 'some db' holds 1 of 3 stories", out.getvalue())
+        self.assertIn("Delete it in Notion", out.getvalue())
 
     def test_empty_markdown_skips_write(self):
         mock_notion = MagicMock()
         with patch.dict(os.environ, {"NOTION_TOKEN": "secret_t", "NOTION_PARENT_PAGE_ID": "pg-1"}), \
              patch("connectors.notion.NotionClient", return_value=mock_notion):
-            push_stories("", "some db")
+            outcome = push_stories("", "some db")
         mock_notion.pages.create.assert_not_called()
+        self.assertIs(outcome, PushOutcome.FAILED, "nothing reached Notion, so the step is not done")
 
 
 if __name__ == "__main__":

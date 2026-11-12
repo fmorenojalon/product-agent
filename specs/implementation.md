@@ -56,7 +56,7 @@ output/               # generated artefacts (gitignored)
 
 ## Phase 2 — Connector Integrations
 
-**Goal:** Replace mock connectors with real integrations so the pipeline reads live Discord feedback and writes user stories to Notion.
+**Goal:** Replace the mock Notion connector with a real integration so the pipeline writes user stories to Notion.
 
 **Scope:**
 - **Notion connector:** Authenticate via Notion API; create user stories as database rows in a configured workspace. One new database per run, named `"{title} — YYYY-MM-DD HH:MM"`.

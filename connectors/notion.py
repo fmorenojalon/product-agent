@@ -2,6 +2,7 @@
 
 import os
 import re
+from enum import Enum
 
 try:
     from notion_client import Client as NotionClient
@@ -113,33 +114,45 @@ def create_database(client: "NotionClient", parent_page_id: str, db_name: str) -
     return db_id
 
 
-def push_stories(stories_markdown: str, db_name: str) -> None:
+class PushOutcome(Enum):
+    PUSHED = "pushed"    # every story is in a new database
+    SKIPPED = "skipped"  # Notion is not set up, so there is nowhere to push to
+    FAILED = "failed"    # the stories did not all reach Notion; the reason was printed
+
+
+def push_stories(stories_markdown: str, db_name: str) -> PushOutcome:
     """Parse UC-4 output and write one Notion database row per story.
 
     Creates a new database named db_name under NOTION_PARENT_PAGE_ID on every call.
-    Silently skips if credentials are not configured.
-    Warns and continues if the Notion write fails for any reason.
+    Never raises: the outcome says what happened, and a failure prints its reason.
+    A failure after the database was created leaves that database in Notion with the stories
+    written so far; the message names it, because a second push creates a new database.
     """
     token = os.getenv("NOTION_TOKEN", "").strip()
     parent_page_id = os.getenv("NOTION_PARENT_PAGE_ID", "").strip()
 
     if not token or not parent_page_id:
         print("  [ Notion ] Skipping — NOTION_TOKEN or NOTION_PARENT_PAGE_ID not set in .env")
-        return
+        return PushOutcome.SKIPPED
 
     if not _NOTION_AVAILABLE:
         print("  [ Notion ] Warning: notion-client not installed. Run: pip install notion-client")
-        return
+        return PushOutcome.SKIPPED
 
+    created = False
+    written = 0
+    total = 0
     try:
         notion = NotionClient(auth=token)
         stories = parse_stories(stories_markdown)
+        total = len(stories)
 
         if not stories:
-            print("  [ Notion ] No stories extracted from output — skipping write")
-            return
+            print("  [ Notion ] Warning: no stories extracted from the output — nothing to write")
+            return PushOutcome.FAILED
 
         db_id = create_database(notion, parent_page_id, db_name)
+        created = True
         print(f"  [ Notion ] Created database '{db_name}'")
 
         for story in stories:
@@ -161,9 +174,16 @@ def push_stories(stories_markdown: str, db_name: str) -> None:
                     "Status": {"select": {"name": "To Do"}},
                 },
             )
+            written += 1
 
         print(f"  [ Notion ] {len(stories)} stories written")
+        return PushOutcome.PUSHED
 
     except Exception as e:
         print(f"  [ Notion ] Warning: write failed — {e}")
-        print("  [ Notion ] Pipeline continuing; local files are unaffected")
+        if created:
+            print(
+                f"  [ Notion ] The database '{db_name}' holds {written} of {total} stories. "
+                "Delete it in Notion before pushing again, or the next push makes a second one."
+            )
+        return PushOutcome.FAILED

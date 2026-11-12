@@ -24,6 +24,8 @@ Integrations: Notion (user story output). Observability included: per-step laten
 
 ### Prerequisites
 
+Python 3.10 or newer (check with `python3 --version`).
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -225,6 +227,8 @@ Setup steps:
 3. Copy the page ID from the URL (the 32-char hex after the last `/`)
 
 Each run creates a new database named `"{title} — YYYY-MM-DD HH:MM"` under that page. If `NOTION_TOKEN` is missing, the pipeline continues and writes local files only.
+
+If the push fails (the likeliest cause is a parent page that is not shared with the integration), the run still finishes and the stories are in `user-stories.md`. The end of the run prints the command that pushes again, `python orchestrator.py --resume <run folder>`, which repeats only the push and costs nothing. The same command pushes a run that skipped Notion, once the keys are in `.env`. A push that fails halfway leaves a database with the stories written so far: delete it in Notion before pushing again.
 
 Secrets go in `.env` — never committed.
 

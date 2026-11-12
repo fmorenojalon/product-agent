@@ -57,7 +57,7 @@ The output folder is created when the run starts. Each step writes its output th
 | `interview` | `run-state.json` (`interview_context`) | Interactive mode only |
 | `spec` | `product-spec.md` | |
 | `stories` | `user-stories.md` | |
-| Notion push | `run-state.json` (`notion` marked done) | Skipped on resume once done, so a resume does not create a duplicate database |
+| Notion push | `run-state.json` (`notion` marked done) | Marked done only when every story reached Notion, and skipped on resume once done, so a resume does not create a duplicate database. A push that failed, or that was skipped because Notion is not set up, is tried again on resume, and no other step runs again |
 
 After every tracked step, `run-metrics.jsonl` and `run-report.md` are rewritten, so the cost and latency of finished steps survive a crash.
 
@@ -229,7 +229,7 @@ What this design does not guarantee, and what to do about it. Items marked "meas
 17. **The search cap and single-request completion are checked offline only.** "Search count never exceeds the cap" and "normal documents need no continuation" can only be established by a real run. The offline tests check the shape of each request, not the API's behaviour.
 18. **No fixed pause between steps.** At a low tier a rate-limit response appears as a visible wait from the retry policy, not as a pause before the call. If one step needs more input than the tier allows in a minute, it fails (see 2).
 19. **Research and feedback never run in parallel**, whatever the account's limits would allow. This costs wall-clock time.
-20. **A failed Notion push is not retried on resume.** The push reports its own failures and does not raise, so the run records it as done. The stories are in `user-stories.md`.
+20. **A push that fails after creating the database leaves that database in Notion.** The push never raises: it returns whether it succeeded, and a failure prints its reason and, at the end of the run, the `--resume` command that pushes again. A resume pushes to a new database, so a database that holds only some of the stories stays until it is deleted; the failure message names it and says how many stories it holds. A failure before anything is created, such as a parent page that is not shared with the integration, needs no cleanup. *What to do:* delete the partial database in Notion, fix the cause, and resume. The stories are always in `user-stories.md`.
 21. **Only the SDK is pinned.** The other dependencies are not pinned and there is no lockfile.
 22. **A report can open with a line that is not part of it.** Before searching, the model often announces the searches ("I'll run all the research searches…") or writes a preface ("Here is the full report…"), and the pipeline keeps that text. Removing everything before the first heading would also remove real content, such as a note on missing data. *What to do:* delete the line by hand if it matters.
 
@@ -258,7 +258,7 @@ What this design does not guarantee, and what to do about it. Items marked "meas
 |---|---|
 | `tests/test_retry.py` | Each error class from the table: retried or raised, wait source, budget, visible waits, exactly one request on fail-fast errors |
 | `tests/test_run_state.py` | Round-trip, atomic writes, completion marking, load errors |
-| `tests/test_resume.py` | Failing the pipeline at each step in each context mode, then resuming: finished steps are not called again, the human gate is not asked twice, the final outputs are complete, no fixed pause between steps |
+| `tests/test_resume.py` | Failing the pipeline at each step in each context mode, then resuming: finished steps are not called again, the human gate is not asked twice, the final outputs are complete, no fixed pause between steps; a Notion push that failed or was skipped is repeated on resume, with no other step run again, and a push that succeeded is not repeated |
 | `tests/test_context.py` | Context modes, the direction passed to the spec, and the bounded summary request (see [context-handling.md](context-handling.md)) |
 | `tests/test_text_assembly.py` | How text blocks become one text: citation-split sentences stay whole, text around a search is separated once |
 | `tests/test_effort.py` | The effort setting reaching every request (see [models-and-effort.md](models-and-effort.md)) |

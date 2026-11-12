@@ -48,7 +48,6 @@ Integrations are implemented as connector scripts in `connectors/`, keeping the 
 
 | Integration | Purpose | Phase 1 | Phase 2 |
 |---|---|---|---|
-| **Discord** | Read recent user feedback from configured channels | Mock (fixture data) | Real — Discord REST API |
 | **Notion** | Create user stories as database rows | Mock (stdout) | Real — Notion API |
 
 ## Output Format
@@ -74,7 +73,7 @@ output/
 
 ## Configuration
 
-- Pipeline settings (model, Discord channels, Notion workspace) in `config.yaml`
+- Pipeline settings (model, Notion workspace) in `config.yaml`
 - Secrets (API keys) in `.env`
 
 ## Observability (Phase 3)

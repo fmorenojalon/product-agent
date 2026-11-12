@@ -74,7 +74,7 @@ The agent researches publicly available user feedback on comparable products and
 - Agent: `product-user-feedback` skill (SKILL.md as system prompt via Claude API)
 - Tools: Anthropic hosted web search
 - Runs after UC-1
-- **New work — Discord connector:** Implemented in Phase 2. Phase 1 uses a mock connector returning fixture data.
+- Community feedback comes from web search alone, including `site:reddit.com` queries. There is no Discord connector: it would add a credential and no further signal.
 
 ### Synthesis & Proposal Generation (Orchestrator step)
 Once UC-1 and UC-2 complete, the orchestrator synthesizes both outputs and generates 2–3 distinct product direction proposals. Each proposal includes a short name and rationale grounded in the research.
@@ -103,7 +103,7 @@ The agent breaks the product spec into structured epics and user stories.
 ## Out of Scope (PoC)
 
 - Roadmap fit assessment (`product-roadmap-fit` skill deferred to a later phase)
-- Additional feedback connectors beyond Discord (Intercom, etc.)
+- Feedback connectors (Discord, Intercom, etc.)
 - Approval workflows or stakeholder routing beyond the proposal selection gate
 - Custom UI — interaction is CLI-first
 
@@ -115,7 +115,6 @@ The agent breaks the product spec into structured epics and user stories.
 | Pre-step: competitor + persona extraction | New | Phase 1 |
 | Brave Search tool integration | New | Phase 1 |
 | Orchestrator synthesis + proposal generation | New | Phase 1 |
-| Discord connector script | New | Phase 2 |
 | Notion connector script | New | Phase 2 |
 | Observability layer (latency, cost, handoff metrics) | New | Phase 3 |
 | Rate management and run resilience (per-step saving, resume, single retry policy) | New | Phase 4 |
@@ -129,6 +128,5 @@ The agent breaks the product spec into structured epics and user stories.
 | Spec and user stories generated after user confirms a direction | Phase 1 |
 | All outputs saved as markdown files in a timestamped output/ folder | Phase 1 |
 | User stories appear in Notion after a single end-to-end run | Phase 2 |
-| Discord feedback included in UC-2 synthesis | Phase 2 |
 | Per-task cost and latency tracked and attributable per agent | Phase 3 |
 | An API fault never loses finished steps; an interrupted run resumes without repeating them | Phase 4 |

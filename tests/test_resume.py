@@ -12,6 +12,7 @@ from collections import Counter
 import pytest
 
 import orchestrator
+from connectors.notion import PushOutcome
 
 IDEA = "# Idea\n\nA meeting-to-task tool for project managers."
 
@@ -60,6 +61,7 @@ class FakeApi:
         self.stories_text = STORIES
         self.gate_prompts = 0
         self.pushed = 0
+        self.push_outcome = PushOutcome.PUSHED
         self.quality_continue = False
         self.changed_doc_answer = "y"
         self.sleeps: list[float] = []
@@ -101,6 +103,7 @@ class FakeApi:
 
     def push_stories(self, stories, db_name):
         self.pushed += 1
+        return self.push_outcome
 
     # driving the CLI
     def run(self, *argv):
@@ -199,6 +202,62 @@ def test_resume_of_a_completed_run_calls_nothing(fake):
     assert dict(fake.calls) == calls_after_first_run
     assert fake.gate_prompts == 1
     assert fake.pushed == 1, "resuming must not create a second Notion database"
+
+
+# ── The Notion push is repeated until it succeeds ────────────────────────────
+
+def test_a_failed_push_is_retried_by_resume_without_repeating_any_step(fake, capsys):
+    fake.push_outcome = PushOutcome.FAILED
+    fake.run("idea.md")
+    folder = fake.run_folder()
+    out = capsys.readouterr().out
+    assert "TOTAL" in out, "the run still ends with its cost summary"
+    assert "The Notion push failed" in out
+    assert f"python orchestrator.py --resume output/{folder.name}" in out
+    assert (folder / "user-stories.md").read_text() == STORIES
+    assert "notion" not in json.loads((folder / "run-state.json").read_text())["done"]
+    calls = dict(fake.calls)
+
+    fake.push_outcome = PushOutcome.PUSHED
+    fake.run("--resume", str(folder))
+
+    assert fake.pushed == 2
+    assert dict(fake.calls) == calls, "only the push ran again"
+    assert fake.gate_prompts == 1
+    assert "notion" in json.loads((folder / "run-state.json").read_text())["done"]
+    assert "The Notion push failed" not in capsys.readouterr().out
+    assert len(fake.metric_rows()) == 5, "the retry adds no cost"
+
+
+def test_a_push_that_succeeded_is_not_repeated(fake):
+    fake.run("idea.md")
+    fake.run("--resume", str(fake.run_folder()))
+    assert fake.pushed == 1
+
+
+def test_a_push_keeps_failing_until_it_works(fake, capsys):
+    fake.push_outcome = PushOutcome.FAILED
+    fake.run("idea.md")
+    folder = fake.run_folder()
+    fake.run("--resume", str(folder))
+    assert fake.pushed == 2 and capsys.readouterr().out.count("The Notion push failed") == 2
+    fake.push_outcome = PushOutcome.PUSHED
+    fake.run("--resume", str(folder))
+    fake.run("--resume", str(folder))
+    assert fake.pushed == 3
+
+
+def test_a_run_without_notion_set_up_stays_pending_and_does_not_warn(fake, capsys):
+    fake.push_outcome = PushOutcome.SKIPPED
+    fake.run("idea.md")
+    folder = fake.run_folder()
+    assert "The Notion push failed" not in capsys.readouterr().out
+    assert "notion" not in json.loads((folder / "run-state.json").read_text())["done"]
+
+    fake.push_outcome = PushOutcome.PUSHED  # Notion is set up afterwards
+    fake.run("--resume", str(folder))
+    assert fake.pushed == 2
+    assert "notion" in json.loads((folder / "run-state.json").read_text())["done"]
 
 
 # ── Declining a quality check ────────────────────────────────────────────────

@@ -16,7 +16,7 @@ from agent import (
     complete, parse_json, run_skill,
 )
 from connectors.discord import fetch_feedback
-from connectors.notion import push_stories
+from connectors.notion import PushOutcome, push_stories
 from observability import (
     RunTracker, StepMetrics, QualityResult,
     estimate_cost, check_quality, profile_models, prompt_quality_failure, telemetry_from_usage,
@@ -681,9 +681,14 @@ def _run_pipeline(state: RunState, profile: dict, document: str) -> None:
     )
     print()
 
+    # Done only once the stories are in Notion: a resume pushes again after a failure, and
+    # after Notion has been set up for a run that skipped it.
+    notion_failed = False
     if not state.is_done("notion"):
-        push_stories(stories, db_name)
-        state.complete("notion")
+        outcome = push_stories(stories, db_name)
+        if outcome is PushOutcome.PUSHED:
+            state.complete("notion")
+        notion_failed = outcome is PushOutcome.FAILED
 
     _divider("  Run summary")
     tracker.print_summary()
@@ -695,6 +700,10 @@ def _run_pipeline(state: RunState, profile: dict, document: str) -> None:
     print(  "                  run-report.md · run-metrics.jsonl · run-state.json")
     _divider()
     print()
+    if notion_failed:
+        print(f"  The Notion push failed. The stories are saved in {folder / _STEP_FILES['stories']}.")
+        print( "  Fix the cause (see above), then push again without repeating any other step:")
+        print(f"    python orchestrator.py --resume {folder}\n")
 
 
 def main() -> None:
