@@ -500,3 +500,53 @@ def test_the_terminal_summary_is_quiet_when_every_step_is_scored_or_not_expected
     t.record(_make_metrics("research"))
     t.print_summary()
     assert "not scored" not in capsys.readouterr().out
+
+
+# ── the score is read from the first JSON object in the reply ────────────────
+
+def _scorer_text(text: str):
+    from types import SimpleNamespace
+    return _reply(SimpleNamespace(type="text", text=text))
+
+
+@pytest.mark.parametrize("reply", [
+    '{"score": 4, "reason": "complete"}',
+    '```json\n{"score": 4, "reason": "complete"}\n```',
+    'Here is my rating:\n{"score": 4, "reason": "complete"}',
+    '{"score": 4, "reason": "complete"}\n\nNote: the ending is a little abrupt.',
+    'Rating {the output} below:\n```json\n{"score": 4, "reason": "complete"}\n```\nThat is all.',
+])
+@patch("observability.api_call_with_retry")
+@patch("observability.Anthropic")
+def test_the_score_is_read_whatever_surrounds_the_json(mock_anthropic, mock_retry, reply):
+    mock_retry.side_effect = lambda fn: fn()
+    mock_anthropic.return_value.messages.create.return_value = _scorer_text(reply)
+    result = check_quality("research", "## H\n\n" + "x" * 300, {"key": "3"})
+    assert result.llm_score == 4 and not result.scorer_failed, result.warning
+
+
+@pytest.mark.parametrize("reply", [
+    "I would rate this a four out of five.",
+    '{"reason": "no score given"}',
+    '{"score": "high", "reason": "not a number"}',
+    "",
+])
+@patch("observability.api_call_with_retry")
+@patch("observability.Anthropic")
+def test_a_reply_without_a_usable_score_is_a_visible_failure(mock_anthropic, mock_retry, reply):
+    mock_retry.side_effect = lambda fn: fn()
+    mock_anthropic.return_value.messages.create.return_value = _scorer_text(reply)
+    result = check_quality("research", "## H\n\n" + "x" * 300, {"key": "3"})
+    assert result.scorer_failed and result.llm_score is None and result.passed
+
+
+@patch("observability.api_call_with_retry")
+@patch("observability.Anthropic")
+def test_the_failure_text_is_one_short_line(mock_anthropic, mock_retry):
+    """The parser's error carries the whole reply: it must not flood the report."""
+    mock_retry.side_effect = lambda fn: fn()
+    long_reply = "I think this is good.\n\n" + "More commentary. " * 200
+    mock_anthropic.return_value.messages.create.return_value = _scorer_text(long_reply)
+    warning = check_quality("research", "## H\n\n" + "x" * 300, {"key": "3"}).warning
+    assert "\n" not in warning and warning.startswith("scorer error: ")
+    assert len(warning) <= len("scorer error: ") + 200

@@ -2,7 +2,8 @@
 
 import pytest
 
-from orchestrator import _parse_json, extract_competitors_and_persona
+from agent import parse_json
+from orchestrator import extract_competitors_and_persona
 from tests.fakes import make_response as _response, text_block as _text
 
 OBJECT = '{"competitors": ["Asana", "Linear", "Monday.com"], "persona": "project manager"}'
@@ -21,7 +22,7 @@ PROFILE = {"steps": {"pre_step": {"model": "m", "max_tokens": 512, "max_searches
     f"{OBJECT}\n{OBJECT}",
 ])
 def test_the_first_object_is_read_whatever_surrounds_it(reply):
-    assert _parse_json(reply) == {
+    assert parse_json(reply) == {
         "competitors": ["Asana", "Linear", "Monday.com"], "persona": "project manager",
     }
 
@@ -29,7 +30,7 @@ def test_the_first_object_is_read_whatever_surrounds_it(reply):
 @pytest.mark.parametrize("reply", ["", "no json here", '{"competitors": ["Asana"', "[1, 2, 3]"])
 def test_a_reply_without_an_object_raises_and_shows_the_reply(reply):
     with pytest.raises(ValueError) as error:
-        _parse_json(reply)
+        parse_json(reply)
     assert reply in str(error.value)
 
 

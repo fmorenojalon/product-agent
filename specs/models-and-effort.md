@@ -42,14 +42,14 @@ Effort goes to the API as `output_config.effort` and takes `low`, `medium`, `hig
 | Step | Profile 1 | Profile 2 | Profile 3 | Profile 4 |
 |---|---|---|---|---|
 | Pre-step, summaries | low | low | low | low |
-| Research, feedback | low | medium | medium | **high** |
+| Research, feedback | low | **high** | medium | **high** |
 | Synthesis | low | medium | medium | medium |
 | Spec, stories | low | medium | medium | medium |
 | Quality score | low | low | low | low |
 
 - **Small steps at `low`:** extracting two names, summarising a report and scoring an output need no reasoning.
 - **Main steps at `medium`:** that is one level below Sonnet 5.5's default. The documentation names `medium` as the starting point for well-specified multi-step work, and it keeps cost and time near what the earlier models took. Research and feedback also run searches, and Haiku 5.5 is more likely to skip a search at `low`.
-- **Profile 4 at `high`:** that profile exists for the deepest research, so the Opus steps think more.
+- **Profiles 2 and 4 research at `high`:** profile 4 exists for the deepest research, so its Opus steps think more. In profile 2 the model is Haiku 5.5, for which the documentation recommends `high` for knowledge work, longer agent tasks and strict instruction following. It is cheap on Haiku, so the extra thinking costs little.
 - **Profile 1 at `low`:** it only checks the wiring.
 
 The values are starting points. The run report shows output tokens per step, and thinking tokens are part of that figure, so a step that costs more than expected points at its effort.
@@ -101,6 +101,7 @@ What this design does not guarantee, and what to do about it. Items marked "not 
 |---|---|---|
 | Models | The latest of each family | Better and cheaper per token than the models they replace |
 | Effort for main steps | `medium` | One step below Sonnet 5.5's default; the documented starting point for multi-step work |
+| Effort for research and feedback on Haiku 5.5 | `high` | The documented level for knowledge work and longer agent tasks, at a small cost on a cheap model |
 | Effort for small steps and the score | `low` | No reasoning needed |
 | Effort in profile 4 research | `high` | The profile exists for depth |
 | Ceilings | 32,000, 64,000 and the smaller ones above | Thinking and the newer tokenizer take room that the documents alone do not |

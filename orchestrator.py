@@ -2,7 +2,6 @@
 import argparse
 import hashlib
 import sys
-import json
 import re
 import time
 from datetime import datetime
@@ -14,7 +13,7 @@ load_dotenv()
 from agent import (
     CONFIG, load_profile,
     step_model, step_max_tokens, step_effort,
-    complete, run_skill,
+    complete, parse_json, run_skill,
 )
 from connectors.discord import fetch_feedback
 from connectors.notion import push_stories
@@ -26,18 +25,6 @@ from run_state import RunState, write_text_atomic
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
-
-def _parse_json(text: str) -> dict:
-    """The first JSON object in a model reply; any text or code fence around it is ignored."""
-    decoder = json.JSONDecoder()
-    for start in (m.start() for m in re.finditer(r"\{", text)):
-        try:
-            obj, _ = decoder.raw_decode(text, start)
-        except json.JSONDecodeError:
-            continue
-        return obj
-    raise ValueError(f"The model's reply holds no JSON object:\n{text}")
-
 
 def _divider(label: str = "") -> None:
     line = "─" * 70
@@ -270,7 +257,7 @@ def extract_competitors_and_persona(document: str, profile: dict) -> tuple[list[
             f"## Product Idea Document\n\n{document}"
         ),
     }], step="pre_step", profile=profile)
-    data = _parse_json(text)
+    data = parse_json(text)
     if not isinstance(data.get("competitors"), list) or not isinstance(data.get("persona"), str):
         raise ValueError(f'The model\'s reply lacks "competitors" (a list) or "persona" (text):\n{text}')
     return data["competitors"], data["persona"]

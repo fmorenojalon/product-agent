@@ -63,3 +63,77 @@ def test_complete_returns_the_separated_text(api):
     )]
     text, _ = complete([{"role": "user", "content": "x"}], model="m", max_tokens=100)
     assert text == "Announcing.\n\nThe report."
+
+
+# ── how the rounds of one answer are joined ──────────────────────────────────
+
+def _answer(*responses, api):
+    api.responses = list(responses)
+    text, _ = complete([{"role": "user", "content": "x"}], model="m", max_tokens=100)
+    return text
+
+
+def test_a_cut_inside_a_word_is_continued_without_a_break(api):
+    text = _answer(
+        _response("max_tokens", _text("Half a re")),
+        _response("end_turn", _text("port and the rest")),
+        api=api,
+    )
+    assert text == "Half a report and the rest"
+
+
+def test_a_cut_inside_a_table_row_is_continued_without_a_break(api):
+    text = _answer(
+        _response("max_tokens", _text("| Beamer | $49 | Yes |\n| LaunchN")),
+        _response("end_turn", _text("otes | $249 | No |\n")),
+        api=api,
+    )
+    assert text == "| Beamer | $49 | Yes |\n| LaunchNotes | $249 | No |\n"
+
+
+def test_several_cuts_add_nothing_between_any_of_the_pieces(api):
+    text = _answer(
+        _response("max_tokens", _text("one")),
+        _response("max_tokens", _text("two")),
+        _response("end_turn", _text("three")),
+        api=api,
+    )
+    assert text == "onetwothree"
+
+
+def test_a_resumed_pause_is_joined_with_a_newline(api):
+    text = _answer(
+        _response("pause_turn", _text("Before the pause."), _search(), _results()),
+        _response("end_turn", _text("After it.")),
+        api=api,
+    )
+    assert text == "Before the pause.\nAfter it."
+
+
+def test_a_round_with_no_text_adds_no_separator(api):
+    text = _answer(
+        _response("max_tokens", _search(), _results()),
+        _response("end_turn", _text("The whole answer.")),
+        api=api,
+    )
+    assert text == "The whole answer."
+
+
+def test_a_pause_then_a_cut_then_the_end(api):
+    text = _answer(
+        _response("pause_turn", _text("Searching.")),
+        _response("max_tokens", _text("The repo")),
+        _response("end_turn", _text("rt body")),
+        api=api,
+    )
+    assert text == "Searching.\nThe report body"
+
+
+def test_a_pause_before_any_text_leaves_no_leading_newline(api):
+    """A turn can pause while it is still searching, before it has written anything."""
+    text = _answer(
+        _response("pause_turn", _search(), _results()),
+        _response("end_turn", _text("The answer.")),
+        api=api,
+    )
+    assert text == "The answer."

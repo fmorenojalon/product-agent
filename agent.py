@@ -1,4 +1,6 @@
+import json
 import os
+import re
 import time
 import random
 import yaml
@@ -311,6 +313,18 @@ def _searches_run(response) -> int:
     return sum(1 for b in response.content if getattr(b, "type", None) in ("tool_use", "server_tool_use"))
 
 
+def parse_json(text: str) -> dict:
+    """The first JSON object in a model reply; any text or code fence around it is ignored."""
+    decoder = json.JSONDecoder()
+    for start in (m.start() for m in re.finditer(r"\{", text)):
+        try:
+            obj, _ = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            continue
+        return obj
+    raise ValueError(f"The model's reply holds no JSON object:\n{text}")
+
+
 def _text_of(response) -> str:
     """The text of a response, in order.
 
@@ -347,6 +361,9 @@ def complete(
     """Run one request to a complete answer. Returns (text, usage), usage summed across rounds.
     The usage also carries the call's waits, retries and rate-limit headroom (see CallStats).
 
+    The text of successive rounds is joined with nothing after a max_tokens cut, which can fall
+    anywhere in a word, and with a newline after a resumed pause.
+
     Every stop reason is handled, so a partial answer is never returned silently:
       end_turn    done
       max_tokens  continue from where the model stopped (with stop_at_ceiling, keep the
@@ -361,7 +378,8 @@ def complete(
     added to a continuation: dropping the tools changes the cached prefix, so it could
     not be read and would only cost the cache-write premium.
     """
-    accumulated: list[str] = []
+    answer = ""
+    joiner = ""  # what goes between the answer so far and the text of the next round
     search_count = 0
     total_input_tokens = 0
     total_output_tokens = 0
@@ -391,7 +409,7 @@ def complete(
 
         text = _text_of(response)
         if text:
-            accumulated.append(text)
+            answer += (joiner if answer else "") + text
 
         stop = response.stop_reason
         if stop == "end_turn" or (stop == "max_tokens" and stop_at_ceiling):
@@ -403,12 +421,14 @@ def complete(
             # push the continuation request over the 30k token/min rate limit.
             # The model's partial text already incorporates the search findings.
             use_tools = False
+            joiner = ""  # the cut can fall inside a word or a table row: add nothing between the pieces
             text_blocks = [b for b in response.content if getattr(b, "type", "") == "text"]
             messages.append({"role": "assistant", "content": text_blocks or response.content})
             messages.append({"role": "user", "content": _CONTINUE_PROMPT})
         elif stop == "pause_turn":
             # The API paused a long search turn. Sending it back unchanged resumes it.
             # Nothing is stripped: the paused search has to stay intact.
+            joiner = "\n"
             messages.append({"role": "assistant", "content": response.content})
         elif stop == "refusal":
             raise StopReasonError(step, stop, _refusal_detail(response))
@@ -417,7 +437,7 @@ def complete(
     else:
         raise StopReasonError(step, None, f"no final answer after {_MAX_ROUNDS} rounds")
 
-    text = "\n".join(accumulated)
+    text = answer
     if not text.strip():
         raise StopReasonError(step, "end_turn", "the model returned no text")
     usage = {

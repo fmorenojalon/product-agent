@@ -150,7 +150,7 @@ A resumed search turn is sent with the same tools, because a paused turn cannot 
 
 ### Text of a response
 
-A response is a list of blocks, and the text is assembled in order. Text blocks that follow one another are joined as they are, because web-search citations split a sentence across blocks. Text separated by a search or any other non-text block is separated by one blank line, so what the model says before it searches does not run into what it writes after. The text of successive rounds is joined with a newline.
+A response is a list of blocks, and the text is assembled in order. Text blocks that follow one another are joined as they are, because web-search citations split a sentence across blocks. Text separated by a search or any other non-text block is separated by one blank line, so what the model says before it searches does not run into what it writes after. The text of successive rounds is joined with nothing after a `max_tokens` cut, because the cut can fall inside a word or a table row, and with a newline after a resumed pause.
 
 ## Design: request load
 

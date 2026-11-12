@@ -196,7 +196,7 @@ def test_a_cut_answer_is_still_continued_by_default(api):
         _response("end_turn", _text("part two")),
     ]
     text, _ = complete([{"role": "user", "content": "x"}], model="m", max_tokens=100)
-    assert text == "part one, \npart two"
+    assert text == "part one, part two"
     assert len(api.requests) == 2
 
 

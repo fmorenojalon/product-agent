@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from anthropic import Anthropic
-from agent import LIGHT_MODEL, api_call_with_retry
+from agent import LIGHT_MODEL, api_call_with_retry, parse_json
 
 # ── Pricing ───────────────────────────────────────────────────────────────────
 # Verify against https://platform.claude.com/docs/en/about-claude/pricing before each release.
@@ -194,8 +194,7 @@ def llm_quality_score(step: str, output: str, profile: dict) -> tuple[int, str]:
     )
     # The reply can start with a thinking block, which has no text: join the text blocks.
     raw = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
-    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
-    data = json.loads(raw)
+    data = parse_json(raw)  # text or a code fence around the JSON is ignored
     return int(data["score"]), str(data.get("reason", ""))
 
 
@@ -214,7 +213,8 @@ def check_quality(step: str, output: str, profile: dict) -> QualityResult:
         score, reason = llm_quality_score(step, output, profile)
     except Exception as e:
         # Scorer errors are non-fatal — log but don't block the pipeline
-        return QualityResult(heuristic_ok=True, warning=f"{_SCORER_ERROR}{e}")
+        detail = " ".join(str(e).split())[:200]  # one line: the error can carry the whole reply
+        return QualityResult(heuristic_ok=True, warning=f"{_SCORER_ERROR}{detail}")
 
     warning = reason if score <= 2 else None
     return QualityResult(heuristic_ok=True, llm_score=score, warning=warning)

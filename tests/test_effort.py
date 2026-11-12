@@ -86,10 +86,19 @@ def test_small_steps_run_at_low_effort(key):
         assert step_effort(step, profile) == "low", step
 
 
-@pytest.mark.parametrize("key", ["2", "3"])
-def test_the_main_steps_run_at_medium_effort(key):
-    profile = agent.load_profile(key)
+def test_balanced_profile_runs_its_main_steps_at_medium_effort():
+    profile = agent.load_profile("3")
     for step in ("research", "feedback", "synthesis", "spec", "stories"):
+        assert step_effort(step, profile) == "medium", step
+
+
+def test_budget_profile_researches_at_high_effort_and_writes_at_medium():
+    """Haiku 5.5 is cheap, and the documentation recommends high for knowledge work and
+    longer agent tasks; the steps that do not search stay at medium."""
+    profile = agent.load_profile("2")
+    for step in ("research", "feedback"):
+        assert step_effort(step, profile) == "high", step
+    for step in ("synthesis", "spec", "stories"):
         assert step_effort(step, profile) == "medium", step
 
 

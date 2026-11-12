@@ -58,7 +58,7 @@ Applied after the heuristic passes. A single Haiku call reads the **whole output
 
 - Score 1–2: treated as a quality failure (warn + ask)
 - Score 3–5: passes; score recorded in metrics
-- The score is read from the reply's text blocks, so a thinking block ahead of the text does not matter
+- The score is read from the first JSON object in the reply's text blocks, so a thinking block ahead of the text, or a code fence, a preface or a closing note around the JSON, does not matter
 - A reply with no usable JSON, or a failed call, does not stop the run, and it is not hidden: the step shows `✓ (not scored)` in the tables, the reason is listed under Quality warnings in `run-report.md`, and the terminal summary says how many steps were not scored
 - Cost: about $0.001 to $0.012 per step, by output size, and about $0.03 per run (estimate at published rates)
 

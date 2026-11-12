@@ -59,8 +59,8 @@ profiles:
     steps:
       pre_step:  { model: claude-haiku-5-5, effort: low,    max_tokens: 2000,  max_searches: 0 }
       compress:  { model: claude-haiku-5-5, effort: low,    max_tokens: 1500,  max_searches: 0 }
-      research:  { model: claude-haiku-5-5, effort: medium, max_tokens: 32000, max_searches: 5 }
-      feedback:  { model: claude-haiku-5-5, effort: medium, max_tokens: 32000, max_searches: 5 }
+      research:  { model: claude-haiku-5-5, effort: high,   max_tokens: 32000, max_searches: 5 }
+      feedback:  { model: claude-haiku-5-5, effort: high,   max_tokens: 32000, max_searches: 5 }
       synthesis: { model: claude-haiku-5-5, effort: medium, max_tokens: 8000,  max_searches: 0 }
       spec:      { model: claude-haiku-5-5, effort: medium, max_tokens: 32000, max_searches: 0 }
       stories:   { model: claude-haiku-5-5, effort: medium, max_tokens: 64000, max_searches: 0 }
